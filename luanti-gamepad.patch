@@ -1,0 +1,2078 @@
+diff --git a/builtin/common/settings/CMakeLists.txt b/builtin/common/settings/CMakeLists.txt
+index c7efe6a..40649f0 100644
+--- a/builtin/common/settings/CMakeLists.txt
++++ b/builtin/common/settings/CMakeLists.txt
+@@ -2,6 +2,7 @@ set(BUILTIN_COMMON_SETTINGS_SRCS
+ 	common/settings/components.lua
+ 	common/settings/dlg_change_mapgen_flags.lua
+ 	common/settings/dlg_settings.lua
++	common/settings/gamepad_layouts.lua
+ 	common/settings/generate_from_settingtypes.lua
+ 	common/settings/init.lua
+ 	common/settings/settingtypes.lua
+diff --git a/builtin/common/settings/components.lua b/builtin/common/settings/components.lua
+index bf89700..b964541 100644
+--- a/builtin/common/settings/components.lua
++++ b/builtin/common/settings/components.lua
+@@ -478,15 +478,39 @@ local function get_key_setting(name)
+ 	return core.settings:get(name):split("|")
+ end
+ 
++local function is_gamepad_keycode(str)
++	return str:sub(1, #"GAMEPAD_") == "GAMEPAD_"
++end
++
++-- Splits the bindings of a key setting into gamepad ones and all others
++-- (keyboard, mouse, ...), keeping the order within each group.
++local function split_gamepad_bindings(value)
++	local pad, others = {}, {}
++	for _, v in ipairs(value) do
++		table.insert(is_gamepad_keycode(v) and pad or others, v)
++	end
++	return pad, others
++end
++
+ -- Setting names where an empty field shall be shown to assign new keybindings.
+ local key_add_empty = {}
+ 
+-function make.key(setting)
++-- If `gamepad_only` is set, only the gamepad bindings of the setting are shown
++-- and edited; keyboard and mouse bindings are left untouched.
++local function make_key(setting, gamepad_only)
++	local function get_shown_bindings()
++		local value = get_key_setting(setting.name)
++		if not gamepad_only then
++			return value
++		end
++		return (split_gamepad_bindings(value))
++	end
++
+ 	local btn_bind = "bind_" .. setting.name
+ 	local btn_clear = "unbind_" .. setting.name
+ 	local btn_add = "add_" .. setting.name
+ 	local function add_conflict_warnings(fs, height)
+-		local value = get_key_setting(setting.name)
++		local value = get_shown_bindings()
+ 		if value == "" then
+ 			return height
+ 		end
+@@ -522,15 +546,19 @@ function make.key(setting)
+ 
+ 	return {
+ 		info_text = setting.comment,
+-		setting = setting,
++		-- Without `setting` the generic "reset to default" button is not shown.
++		-- That button would also reset keyboard and mouse bindings, so on the
++		-- gamepad page resetting is done through the layout presets instead.
++		setting = (not gamepad_only) and setting or nil,
+ 		spacing = 0.1,
+ 
+ 		get_formspec = function(self, avail_w)
+ 			local value_string = core.settings:get(setting.name) or ""
+ 			local default_value = setting.default or ""
+-			self.resettable = core.settings:has(setting.name) and (value_string ~= default_value)
++			self.resettable = not gamepad_only and
++				core.settings:has(setting.name) and (value_string ~= default_value)
+ 			local value_width = math.max(2.5, avail_w / 2)
+-			local value = get_key_setting(setting.name)
++			local value = get_shown_bindings()
+ 			local fs = {
+ 				("label[0,0.4;%s]"):format(get_label(setting)),
+ 			}
+@@ -578,15 +606,32 @@ function make.key(setting)
+ 				key_add_empty[setting.name] = true
+ 				return true
+ 			end
+-			local value = get_key_setting(setting.name)
++			local value = get_shown_bindings()
++			local function save()
++				if gamepad_only then
++					-- keep keyboard/mouse bindings, replace the gamepad ones
++					local _, others = split_gamepad_bindings(get_key_setting(setting.name))
++					for _, v in ipairs(value) do
++						others[#others + 1] = v
++					end
++					value = others
++				end
++				core.settings:set(setting.name, table.concat(value, "|"))
++			end
+ 			for i = 1, #value + 1 do
+ 				if fields[("%s_%d"):format(btn_bind, i)] then
+-					value[i] = fields[("%s_%d"):format(btn_bind, i)]
+-					core.settings:set(setting.name, table.concat(value, "|"))
++					local new = fields[("%s_%d"):format(btn_bind, i)]
++					if gamepad_only and not is_gamepad_keycode(new) then
++						-- Only gamepad input can be bound on the gamepad page.
++						-- (Keyboard/mouse are handled on the other page.)
++						return true
++					end
++					value[i] = new
++					save()
+ 					return true
+ 				elseif fields[("%s_%d"):format(btn_clear, i)] then
+ 					table.remove(value, i)
+-					core.settings:set(setting.name, table.concat(value, "|"))
++					save()
+ 					return true
+ 				end
+ 			end
+@@ -594,6 +639,15 @@ function make.key(setting)
+ 	}
+ end
+ 
++function make.key(setting)
++	return make_key(setting, false)
++end
++
++-- Like make.key, but limited to the gamepad bindings of a setting
++function make.gamepad_key(setting)
++	return make_key(setting, true)
++end
++
+ if INIT == "pause_menu" then
+ 	-- Making the noise parameter dialog work in the pause menu settings would
+ 	-- require porting "FSTK" (at least the dialog API) from the mainmenu formspec
+diff --git a/builtin/common/settings/dlg_settings.lua b/builtin/common/settings/dlg_settings.lua
+index f9e8d5c..ec494fb 100644
+--- a/builtin/common/settings/dlg_settings.lua
++++ b/builtin/common/settings/dlg_settings.lua
+@@ -7,6 +7,7 @@ local path = core.get_builtin_path() .. "common" .. DIR_DELIM .. "settings" .. D
+ 
+ local component_funcs =  dofile(path .. "components.lua")
+ local shadows_component =  dofile(path .. "shadows_component.lua")
++local gamepad_layouts = dofile(path .. "gamepad_layouts.lua")
+ 
+ local loaded = false
+ local info_icon_path = core.formspec_escape(defaulttexturedir .. "settings_info.png")
+@@ -88,6 +89,113 @@ local function load_settingtypes()
+ end
+ 
+ 
++-- Page for rebinding gamepad buttons and sticks.
++-- It only shows and edits the gamepad part of each keybinding, so keyboard
++-- and mouse bindings are never lost by accident.
++local function add_gamepad_bindings_page()
++	local layout_names = function()
++		return {
++			default = fgettext("Default"),
++			-- TRANSLATORS: Gamepad layout: movement on the right stick, looking on the left stick
++			southpaw = fgettext("Southpaw"),
++			-- TRANSLATORS: Gamepad layout: jump on the left bumper
++			bumper_jumper = fgettext("Bumper jumper"),
++		}
++	end
++
++	local layout_component = {
++		id = "gamepad_layout",
++		query_text = fgettext_ne("Gamepad layout"),
++		context = "client",
++		get_formspec = function(self, avail_w)
++			local names = layout_names()
++			local current = gamepad_layouts.detect(core.full_settingtypes, core.settings)
++			local fs = {
++				("label[0,0.4;%s]"):format(fgettext("Layout: $1",
++					current and names[current] or fgettext("Custom"))),
++			}
++			local n = #gamepad_layouts.layouts
++			local gap = 0.2
++			local w = (avail_w - gap * (n - 1)) / n
++			for i, layout in ipairs(gamepad_layouts.layouts) do
++				fs[#fs + 1] = ("button[%f,0.8;%f,0.8;gamepad_layout_%s;%s]"):format(
++					(i - 1) * (w + gap), w, layout.id,
++					core.formspec_escape(names[layout.id] or layout.id))
++			end
++			return table.concat(fs), 1.6
++		end,
++		on_submit = function(self, fields)
++			for _, layout in ipairs(gamepad_layouts.layouts) do
++				if fields["gamepad_layout_" .. layout.id] then
++					gamepad_layouts.apply(layout.id, core.full_settingtypes, core.settings)
++					return true
++				end
++			end
++		end,
++	}
++
++	local common, other = {}, {}
++	for _, info in ipairs(core.full_settingtypes) do
++		if info.type == "key" and info.name:sub(1, #"keymap_") == "keymap_" then
++			local item = {
++				id = info.name .. "_gamepad",
++				query_text = fgettext_ne(info.readable_name or info.name),
++				context = info.context or "client",
++				requires = info.requires,
++				make = function()
++					return component_funcs.gamepad_key(info)
++				end,
++			}
++			-- Actions that have a gamepad binding by default come first
++			local has_default = false
++			for _, v in ipairs((info.default or ""):split("|")) do
++				if gamepad_layouts.is_gamepad_keycode(v) then
++					has_default = true
++				end
++			end
++			table.insert(has_default and common or other, item)
++		end
++	end
++
++	local content = {
++		{ heading = fgettext_ne("Layout") },
++		layout_component,
++		component_funcs.note(fgettext_ne(
++			"Choosing a layout only changes gamepad bindings, " ..
++			"keyboard and mouse bindings are kept."), nil, 2),
++		{ heading = fgettext_ne("Common actions") },
++	}
++	for _, item in ipairs(common) do
++		content[#content + 1] = item
++	end
++	if #other > 0 then
++		content[#content + 1] = { heading = fgettext_ne("Other actions") }
++		for _, item in ipairs(other) do
++			content[#content + 1] = item
++		end
++	end
++
++	local page = {
++		id = "controls_gamepad_bindings",
++		title = fgettext_ne("Gamepad Bindings"),
++		section = "Controls",
++		content = content,
++	}
++	assert(not page_by_id[page.id], "Page " .. page.id .. " already registered")
++
++	-- Show the page right before "Gamepads and Joysticks"
++	local pos = #all_pages + 1
++	for i, p in ipairs(all_pages) do
++		if p.id == "controls_gamepads_and_joysticks" then
++			pos = i
++			break
++		end
++	end
++	table.insert(all_pages, pos, page)
++	page_by_id[page.id] = page
++end
++
++
+ local function load()
+ 	if loaded then
+ 		return
+@@ -144,6 +252,8 @@ local function load()
+ 	-- insert after "touch_controls"
+ 	table.insert(page_by_id.controls_touchscreen.content, 2, touchscreen_layout)
+ 
++	add_gamepad_bindings_page()
++
+ 	extra_components["secure.trusted_mods"] = {
+ 		before = {
+ 			component_funcs.note(fgettext_ne(
+@@ -453,7 +563,7 @@ local function build_page_components(page)
+ 				name = setting.name
+ 				requires = setting.requires
+ 				context = setting.context
+-			elseif item.get_formspec then
++			elseif item.get_formspec or item.make then
+ 				name = item.id
+ 				requires = item.requires
+ 				context = item.context
+@@ -488,6 +598,10 @@ local function build_page_components(page)
+ 			local component_func = component_funcs[setting.type]
+ 			assert(component_func, "Unknown setting type: " .. setting.type)
+ 			retval[i] = component_func(setting)
++		elseif item.make then
++			-- Components with state that must be recreated whenever the page
++			-- is rebuilt
++			retval[i] = item.make()
+ 		elseif item.get_formspec then
+ 			retval[i] = item
+ 		elseif item.heading then
+diff --git a/builtin/common/settings/gamepad_layouts.lua b/builtin/common/settings/gamepad_layouts.lua
+new file mode 100644
+index 0000000..372695c
+--- /dev/null
++++ b/builtin/common/settings/gamepad_layouts.lua
+@@ -0,0 +1,141 @@
++-- Luanti
++-- SPDX-License-Identifier: LGPL-2.1-or-later
++--
++-- Gamepad layout presets.
++--
++-- A preset only describes the *gamepad* bindings of `keymap_*` settings.
++-- Keyboard and mouse bindings are never touched when a preset is applied.
++-- Actions a preset doesn't mention get their default gamepad bindings, so the
++-- presets can never go out of sync with defaultsettings.cpp.
++--
++-- Gamepad keycodes: GAMEPAD_BUTTON_<n> (SDL gamepad button numbering, e.g.
++-- 0 = south/A, 9 = left shoulder, 13 = D-pad left), GAMEPAD_AXIS_PLUS_<n> and
++-- GAMEPAD_AXIS_MINUS_<n> (0/1 = left stick, 2/3 = right stick, 4/5 = triggers).
++
++local M = {}
++
++-- Order matters: it is the order of the buttons in the UI.
++M.layouts = {
++	{
++		id = "default",
++		overrides = {},
++	},
++	{
++		-- Move with the right stick, look with the left stick
++		id = "southpaw",
++		overrides = {
++			keymap_forward = { "GAMEPAD_AXIS_MINUS_3" },
++			keymap_backward = { "GAMEPAD_AXIS_PLUS_3" },
++			keymap_left = { "GAMEPAD_AXIS_MINUS_2" },
++			keymap_right = { "GAMEPAD_AXIS_PLUS_2" },
++			keymap_camera_yaw_left = { "GAMEPAD_AXIS_MINUS_0" },
++			keymap_camera_yaw_right = { "GAMEPAD_AXIS_PLUS_0" },
++			keymap_camera_pitch_up = { "GAMEPAD_AXIS_MINUS_1" },
++			keymap_camera_pitch_down = { "GAMEPAD_AXIS_PLUS_1" },
++			-- stick clicks follow their sticks
++			keymap_aux1 = { "GAMEPAD_BUTTON_2", "GAMEPAD_BUTTON_8" },
++			keymap_camera_mode = { "GAMEPAD_BUTTON_7" },
++		},
++	},
++	{
++		-- Jump on the left bumper so the thumb never leaves the right stick
++		id = "bumper_jumper",
++		overrides = {
++			keymap_jump = { "GAMEPAD_BUTTON_9" },
++			keymap_aux1 = { "GAMEPAD_BUTTON_0", "GAMEPAD_BUTTON_7" },
++			keymap_chat = { "GAMEPAD_BUTTON_10" },
++			keymap_freemove = { "GAMEPAD_BUTTON_2" },
++			keymap_hotbar_previous = { "GAMEPAD_BUTTON_13" },
++			keymap_hotbar_next = { "GAMEPAD_BUTTON_14" },
++		},
++	},
++}
++
++function M.is_gamepad_keycode(str)
++	return str:sub(1, #"GAMEPAD_") == "GAMEPAD_"
++end
++
++local function split(value)
++	local pad, others = {}, {}
++	for _, v in ipairs(value:split("|")) do
++		table.insert(M.is_gamepad_keycode(v) and pad or others, v)
++	end
++	return pad, others
++end
++
++local function find_layout(id)
++	for _, layout in ipairs(M.layouts) do
++		if layout.id == id then
++			return layout
++		end
++	end
++end
++
++-- Gamepad bindings `layout` wants for the key setting `info`
++-- (an entry of core.full_settingtypes), as a list.
++local function wanted_bindings(layout, info)
++	local override = layout.overrides[info.name]
++	if override then
++		return override
++	end
++	return (split(info.default or ""))
++end
++
++local function is_key_setting(info)
++	return info.type == "key" and info.name:sub(1, #"keymap_") == "keymap_"
++end
++
++-- Applies a layout to `settings` (core.settings or anything with
++-- get/set/remove). `settingtypes` is core.full_settingtypes.
++-- Returns false for an unknown layout.
++function M.apply(layout_id, settingtypes, settings)
++	local layout = find_layout(layout_id)
++	if not layout then
++		return false
++	end
++	for _, info in ipairs(settingtypes) do
++		if is_key_setting(info) then
++			local _, others = split(settings:get(info.name) or info.default or "")
++			local new = table.copy(others)
++			for _, v in ipairs(wanted_bindings(layout, info)) do
++				new[#new + 1] = v
++			end
++			local str = table.concat(new, "|")
++			if str == (info.default or "") then
++				settings:remove(info.name)
++			else
++				settings:set(info.name, str)
++			end
++		end
++	end
++	return true
++end
++
++-- Returns the id of the layout whose gamepad bindings match the current
++-- settings exactly (ignoring order), or nil if the bindings are custom.
++function M.detect(settingtypes, settings)
++	for _, layout in ipairs(M.layouts) do
++		local matches = true
++		for _, info in ipairs(settingtypes) do
++			if is_key_setting(info) then
++				local have = split(settings:get(info.name) or info.default or "")
++				local want = wanted_bindings(layout, info)
++				local set = {}
++				for _, v in ipairs(have) do set[v] = true end
++				local n = 0
++				for _, v in ipairs(want) do
++					if not set[v] then matches = false break end
++					n = n + 1
++				end
++				if matches and n ~= #have then matches = false end
++			end
++			if not matches then break end
++		end
++		if matches then
++			return layout.id
++		end
++	end
++	return nil
++end
++
++return M
+diff --git a/builtin/settingtypes.txt b/builtin/settingtypes.txt
+index 69ed1e8..60abdb8 100644
+--- a/builtin/settingtypes.txt
++++ b/builtin/settingtypes.txt
+@@ -196,9 +196,9 @@ keymap_inventory (Open inventory) key SYSTEM_SCANCODE_12|GAMEPAD_BUTTON_3
+ keymap_pause (Open pause menu) key GAMEPAD_BUTTON_6
+ 
+ #    Key for moving fast in fast mode.
+-keymap_aux1 (Aux1) key SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2
++keymap_aux1 (Aux1) key SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2|GAMEPAD_BUTTON_7
+ 
+-keymap_chat (Open chat) key SYSTEM_SCANCODE_23
++keymap_chat (Open chat) key SYSTEM_SCANCODE_23|GAMEPAD_BUTTON_14
+ 
+ #    Key for opening the chat window to type commands.
+ keymap_cmd (Command) key SYSTEM_SCANCODE_56
+@@ -232,7 +232,7 @@ keymap_cinematic (Toggle cinematic mode) key
+ 
+ keymap_minimap (Toggle minimap) key SYSTEM_SCANCODE_25|GAMEPAD_BUTTON_4
+ 
+-keymap_screenshot (Screenshot) key SYSTEM_SCANCODE_69|GAMEPAD_BUTTON_14
++keymap_screenshot (Screenshot) key SYSTEM_SCANCODE_69
+ 
+ keymap_fullscreen (Toggle fullscreen) key SYSTEM_SCANCODE_68
+ 
+@@ -261,7 +261,7 @@ keymap_toggle_profiler (Toggle profiler) key SYSTEM_SCANCODE_63
+ #    Key for toggling the display of mapblock boundaries.
+ keymap_toggle_block_bounds (Toggle block bounds) key
+ 
+-keymap_camera_mode (Toggle camera mode) key SYSTEM_SCANCODE_6
++keymap_camera_mode (Toggle camera mode) key SYSTEM_SCANCODE_6|GAMEPAD_BUTTON_8
+ 
+ keymap_increase_viewing_range_min (Increase view range) key SYSTEM_SCANCODE_46
+ 
+@@ -442,6 +442,48 @@ joystick_outer_deadzone (Joystick outer dead zone) float 0 0 1
+ #    in-game view frustum around.
+ joystick_frustum_sensitivity (Joystick frustum sensitivity) float 170.0 0.001
+ 
++#    Apply the dead zone to the whole stick (circular) instead of to each axis
++#    separately. This keeps small diagonal movements precise.
++gamepad_radial_deadzone (Circular stick dead zone) bool true
++
++#    Shapes how stick deflection translates to movement and camera speed.
++#    1 is linear. Higher values give finer control near the centre of the stick
++#    while still reaching full speed at full deflection.
++gamepad_response_curve (Stick response curve) float 1.5 0.5 4
++
++#    How far a trigger has to be pulled before it counts as pressed.
++gamepad_trigger_threshold (Trigger threshold) float 0.15 0 0.95
++
++#    Invert the vertical axis of the right stick when looking around.
++gamepad_invert_look_y (Invert vertical look) bool false
++
++#    Vertical look speed relative to horizontal look speed.
++#    Values below 1 make looking up and down slower.
++gamepad_look_vertical_ratio (Vertical look speed ratio) float 1.0 0.1 4
++
++#    Vibrate the gamepad, for example when taking damage.
++gamepad_rumble (Gamepad vibration) bool true
++
++gamepad_rumble_strength (Gamepad vibration strength) float 0.7 0 1
++
++#    Allow menus and formspecs to be controlled with a gamepad.
++#    D-Pad / left stick moves the focus, A clicks, X right-clicks, B goes back,
++#    LB/RB switch tabs, the right stick moves a free cursor,
++#    LT + right stick scrolls and RT acts as the Shift key.
++gamepad_menu_navigation (Gamepad menu navigation) bool true
++
++#    Speed of the free cursor (right stick) in menus, in pixels per second
++#    on a 1080p screen at full stick deflection.
++gamepad_cursor_speed (Gamepad cursor speed) float 900 50 10000
++
++#    Time in seconds before menu navigation starts repeating
++#    while a direction is held.
++gamepad_menu_repeat_delay (Gamepad menu repeat delay) float 0.35 0.05 2
++
++#    Time in seconds between repeated menu navigation steps
++#    while a direction is held.
++gamepad_menu_repeat_interval (Gamepad menu repeat interval) float 0.11 0.02 1
++
+ [Graphics and Audio] [client]
+ 
+ [*Graphics]
+diff --git a/doc/gamepad.md b/doc/gamepad.md
+new file mode 100644
+index 0000000..a4d6470
+--- /dev/null
++++ b/doc/gamepad.md
+@@ -0,0 +1,105 @@
++# Gamepad support
++
++Luanti can be played and navigated entirely with a gamepad (anything SDL
++recognises as a game controller: Xbox, PlayStation, Switch Pro, Steam Deck, ...).
++
++## In game
++
++| Input                | Action                                   |
++| -------------------- | ---------------------------------------- |
++| Left stick           | Move                                     |
++| Right stick          | Look                                     |
++| A / South            | Jump                                     |
++| B / East             | Sneak                                    |
++| X / West, L3         | Aux1 (sprint / fast move / climb down)   |
++| Y / North            | Inventory                                |
++| RT                   | Dig / punch / use                        |
++| LT                   | Place / use                              |
++| LB / RB              | Previous / next hotbar slot              |
++| D-Pad up             | Zoom                                     |
++| D-Pad down           | Drop item                                |
++| D-Pad left           | Toggle fly                               |
++| D-Pad right          | Open chat                                |
++| R3 (right stick)     | Toggle camera mode                       |
++| Back / Select        | Toggle minimap                           |
++| Start                | Pause menu                               |
++
++Everything can be rebound in *Settings -> Controls*:
++
++* **Gamepad Bindings** page: shows only the gamepad part of every action.
++  Select a button, then press the gamepad button or move the stick direction
++  you want. The `+` button adds a second binding, the cross removes one.
++  Keyboard and mouse bindings are never changed or shown here, and conflicts
++  between gamepad bindings are highlighted.
++* **Layout** buttons at the top of that page switch all gamepad bindings at
++  once (keyboard/mouse bindings are kept). *Default* also acts as "reset
++  gamepad bindings".
++
++  | Layout        | What changes                                                        |
++  | ------------- | ------------------------------------------------------------------- |
++  | Default       | See the table above                                                 |
++  | Southpaw      | Move with the right stick, look with the left stick; stick clicks swap |
++  | Bumper jumper | Jump on LB, Aux1 on A/L3, chat on RB, fly on X, hotbar on D-Pad left/right |
++
++  "Layout: Custom" is shown when your bindings match none of them.
++* **Actions and Keybindings** page: the classic page showing all bindings of an
++  action together (keyboard, mouse and gamepad).
++
++The gamepad vibrates when you take damage (`gamepad_rumble`).
++
++## In menus and formspecs
++
++The main menu, pause menu, inventory and every mod formspec can be used
++without mouse or keyboard (`gamepad_menu_navigation`).
++
++| Input                 | Action                                                          |
++| --------------------- | --------------------------------------------------------------- |
++| D-Pad / left stick    | Move focus to the nearest widget or inventory slot in that direction. Lists, text fields and scrollbars use the arrows themselves; move sideways or past the first/last row to leave them. |
++| A / South             | Left click (hold to keep the button pressed)                    |
++| X / West              | Right click                                                     |
++| R3 (right stick)      | Middle click                                                    |
++| B / East              | Back / close                                                    |
++| LB / RB               | Previous / next tab                                             |
++| Right stick           | Move a free cursor                                              |
++| LT + right stick up/down | Scroll the element under the cursor                          |
++| RT (held)             | Acts as Shift (e.g. quick-move items in the inventory)          |
++| Y / Start             | Keep their normal meaning (close inventory / close pause menu)  |
++
++The focus and the cursor always move together, so tooltips and clicks match
++what is highlighted. While a "press a button" key binding is waiting for
++input, all gamepad input is passed through to it so any button can be bound.
++
++Text fields work with the system on-screen keyboard (Steam Deck, Steam Big
++Picture, consoles, ...), which SDL opens automatically when a text field
++is focused.
++
++## Tuning
++
++All settings are in *Settings -> Controls -> Gamepads and Joysticks*.
++
++| Setting                         | Purpose                                                    |
++| ------------------------------- | ---------------------------------------------------------- |
++| `joystick_inner_deadzone`       | Stick dead zone (default 0.25)                             |
++| `joystick_outer_deadzone`       | Treat nearly-full deflection as full                       |
++| `gamepad_radial_deadzone`       | Circular dead zone instead of one per axis                 |
++| `gamepad_response_curve`        | 1 = linear, higher = finer control near the centre         |
++| `gamepad_trigger_threshold`     | How far a trigger must be pulled to count as pressed       |
++| `joystick_frustum_sensitivity`  | Look speed                                                 |
++| `gamepad_look_vertical_ratio`   | Vertical look speed relative to horizontal                 |
++| `gamepad_invert_look_y`         | Invert vertical look                                       |
++| `gamepad_rumble`, `gamepad_rumble_strength` | Vibration                                      |
++| `gamepad_menu_navigation`       | Enable/disable gamepad control of menus                    |
++| `gamepad_cursor_speed`          | Free cursor speed in menus                                 |
++| `gamepad_menu_repeat_delay`, `gamepad_menu_repeat_interval` | Auto-repeat of menu navigation |
++
++## Notes for developers
++
++* Raw gamepad axis events are turned into key presses in
++  `MyEventReceiver::handleGamepadAxis` (`src/client/inputhandler.cpp`). Sticks
++  are processed as pairs so the dead zone is circular.
++* `src/gui/gamepadnav.{h,cpp}` contains `GamepadMenuNavigator`. It consumes
++  gamepad events while a menu is open, and works by moving the real cursor and
++  posting ordinary mouse/keyboard events through `IrrlichtDevice::postEventFromUser`,
++  so formspecs and mods need no changes. It is stepped once per frame from
++  `RenderingEngine::run()`.
++* `IrrlichtDevice::rumbleGamepad()` / `hasGamepad()` expose SDL's rumble support.
+diff --git a/irr/include/IrrlichtDevice.h b/irr/include/IrrlichtDevice.h
+index 263166a..1554c91 100644
+--- a/irr/include/IrrlichtDevice.h
++++ b/irr/include/IrrlichtDevice.h
+@@ -369,4 +369,21 @@ class IrrlichtDevice : public virtual IReferenceCounted
+ 		// Dummy implementation
+ 		return GamepadButtonLabel::UNKNOWN;
+ 	}
++
++	//! Whether at least one gamepad is currently connected.
++	virtual bool hasGamepad() const {
++		return false;
++	}
++
++	//! Make the most recently used gamepad rumble.
++	/** \param low_frequency Strength of the low frequency (heavy) motor, 0-65535.
++	\param high_frequency Strength of the high frequency (light) motor, 0-65535.
++	\param duration_ms How long the rumble lasts, in milliseconds.
++	\return True if a gamepad accepted the rumble request. */
++	virtual bool rumbleGamepad(u16 low_frequency, u16 high_frequency, u32 duration_ms) {
++		(void)low_frequency;
++		(void)high_frequency;
++		(void)duration_ms;
++		return false;
++	}
+ };
+diff --git a/irr/src/CIrrDeviceSDL.cpp b/irr/src/CIrrDeviceSDL.cpp
+index 39d5811..5d8e086 100644
+--- a/irr/src/CIrrDeviceSDL.cpp
++++ b/irr/src/CIrrDeviceSDL.cpp
+@@ -296,6 +296,39 @@ GamepadButtonLabel CIrrDeviceSDL::getGamepadButtonLabel(const GamepadButton butt
+ 	return GamepadButtonLabel::UNKNOWN;
+ }
+ 
++bool CIrrDeviceSDL::hasGamepad() const
++{
++#if defined(_IRR_COMPILE_WITH_JOYSTICK_EVENTS_)
++	return !gamepads.empty();
++#else
++	return false;
++#endif
++}
++
++bool CIrrDeviceSDL::rumbleGamepad(u16 low_frequency, u16 high_frequency, u32 duration_ms)
++{
++#if defined(_IRR_COMPILE_WITH_JOYSTICK_EVENTS_)
++	// Prefer the gamepad that was used last, fall back to any connected one.
++	auto p = gamepads.find(recentGamepadID);
++	if (p == gamepads.end())
++		p = gamepads.begin();
++	if (p == gamepads.end())
++		return false;
++#ifdef _IRR_USE_SDL3_
++	return SDL_RumbleGamepad(p->second, low_frequency, high_frequency, duration_ms);
++#elif SDL_VERSION_ATLEAST(2, 0, 9)
++	return SDL_GameControllerRumble(p->second, low_frequency, high_frequency, duration_ms) == 0;
++#else
++	return false;
++#endif
++#else
++	(void)low_frequency;
++	(void)high_frequency;
++	(void)duration_ms;
++	return false;
++#endif
++}
++
+ #if defined(_IRR_COMPILE_WITH_JOYSTICK_EVENTS_) && defined(_IRR_USE_SDL3_)
+ SDL_Gamepad *CIrrDeviceSDL::getRecentGamepad() const
+ {
+diff --git a/irr/src/CIrrDeviceSDL.h b/irr/src/CIrrDeviceSDL.h
+index b2d9baa..b3c82f5 100644
+--- a/irr/src/CIrrDeviceSDL.h
++++ b/irr/src/CIrrDeviceSDL.h
+@@ -281,6 +281,9 @@ class CIrrDeviceSDL : public CIrrDeviceStub
+ 
+ 	GamepadButtonLabel getGamepadButtonLabel(const GamepadButton button) const override;
+ 
++	bool hasGamepad() const override;
++	bool rumbleGamepad(u16 low_frequency, u16 high_frequency, u32 duration_ms) override;
++
+ private:
+ 	// Check if a key is a known special character with no side effects on text boxes.
+ 	static bool keyIsKnownSpecial(EKEY_CODE irrlichtKey);
+diff --git a/minetest.conf.example b/minetest.conf.example
+index 9e73421..074745a 100644
+--- a/minetest.conf.example
++++ b/minetest.conf.example
+@@ -136,12 +136,12 @@
+ #    Key for moving fast in fast mode.
+ #    See https://docs.luanti.org/for-players/controls/
+ #    type: key
+-# keymap_aux1 = SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2
++# keymap_aux1 = SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2|GAMEPAD_BUTTON_7
+ 
+ #    Open chat
+ #    See https://docs.luanti.org/for-players/controls/
+ #    type: key
+-# keymap_chat = SYSTEM_SCANCODE_23
++# keymap_chat = SYSTEM_SCANCODE_23|GAMEPAD_BUTTON_14
+ 
+ #    Key for opening the chat window to type commands.
+ #    See https://docs.luanti.org/for-players/controls/
+@@ -221,7 +221,7 @@
+ #    Screenshot
+ #    See https://docs.luanti.org/for-players/controls/
+ #    type: key
+-# keymap_screenshot = SYSTEM_SCANCODE_69|GAMEPAD_BUTTON_14
++# keymap_screenshot = SYSTEM_SCANCODE_69
+ 
+ #    Toggle fullscreen
+ #    See https://docs.luanti.org/for-players/controls/
+@@ -296,7 +296,7 @@
+ #    Toggle camera mode
+ #    See https://docs.luanti.org/for-players/controls/
+ #    type: key
+-# keymap_camera_mode = SYSTEM_SCANCODE_6
++# keymap_camera_mode = SYSTEM_SCANCODE_6|GAMEPAD_BUTTON_8
+ 
+ #    Increase view range
+ #    See https://docs.luanti.org/for-players/controls/
+@@ -574,6 +574,60 @@
+ #    type: float min: 0.001
+ # joystick_frustum_sensitivity = 170.0
+ 
++#    Apply the dead zone to the whole stick (circular) instead of to each axis
++#    separately. This keeps small diagonal movements precise.
++#    type: bool
++# gamepad_radial_deadzone = true
++
++#    Shapes how stick deflection translates to movement and camera speed.
++#    1 is linear. Higher values give finer control near the centre of the stick
++#    while still reaching full speed at full deflection.
++#    type: float min: 0.5 max: 4
++# gamepad_response_curve = 1.5
++
++#    How far a trigger has to be pulled before it counts as pressed.
++#    type: float min: 0 max: 0.95
++# gamepad_trigger_threshold = 0.15
++
++#    Invert the vertical axis of the right stick when looking around.
++#    type: bool
++# gamepad_invert_look_y = false
++
++#    Vertical look speed relative to horizontal look speed.
++#    Values below 1 make looking up and down slower.
++#    type: float min: 0.1 max: 4
++# gamepad_look_vertical_ratio = 1.0
++
++#    Vibrate the gamepad, for example when taking damage.
++#    type: bool
++# gamepad_rumble = true
++
++#    Gamepad vibration strength
++#    type: float min: 0 max: 1
++# gamepad_rumble_strength = 0.7
++
++#    Allow menus and formspecs to be controlled with a gamepad.
++#    D-Pad / left stick moves the focus, A clicks, X right-clicks, B goes back,
++#    LB/RB switch tabs, the right stick moves a free cursor,
++#    LT + right stick scrolls and RT acts as the Shift key.
++#    type: bool
++# gamepad_menu_navigation = true
++
++#    Speed of the free cursor (right stick) in menus, in pixels per second
++#    on a 1080p screen at full stick deflection.
++#    type: float min: 50 max: 10000
++# gamepad_cursor_speed = 900
++
++#    Time in seconds before menu navigation starts repeating
++#    while a direction is held.
++#    type: float min: 0.05 max: 2
++# gamepad_menu_repeat_delay = 0.35
++
++#    Time in seconds between repeated menu navigation steps
++#    while a direction is held.
++#    type: float min: 0.02 max: 1
++# gamepad_menu_repeat_interval = 0.11
++
+ #
+ # Graphics and Audio
+ #
+diff --git a/src/client/game.cpp b/src/client/game.cpp
+index 76ec88f..2ee81b0 100644
+--- a/src/client/game.cpp
++++ b/src/client/game.cpp
+@@ -2226,6 +2226,22 @@ void Game::handleClientEvent_PlayerDamage(ClientEvent *event, CameraOrientation
+ 			rangelim(damage_ratio * 5.0f, 1.0f, 4.0f);
+ 	}
+ 
++	// Vibrate the gamepad (if any). Stronger and longer for bigger hits.
++	if (g_settings->getBool("gamepad_rumble")) {
++		LocalPlayer *player = client->getEnv().getLocalPlayer();
++		const f32 hp_max = player && player->getCAO() ?
++				player->getCAO()->getProperties().hp_max : PLAYER_MAX_HP_DEFAULT;
++		const f32 ratio = rangelim(event->player_damage.amount / hp_max, 0.0f, 1.0f);
++		const f32 strength = rangelim(g_settings->getFloat("gamepad_rumble_strength"), 0.0f, 1.0f);
++		const f32 power = rangelim(0.35f + ratio * 1.5f, 0.0f, 1.0f) * strength;
++		if (power > 0.0f) {
++			const u16 heavy = static_cast<u16>(power * 65535.0f);
++			const u16 light = static_cast<u16>(power * 0.6f * 65535.0f);
++			const u32 duration_ms = 120 + static_cast<u32>(ratio * 380.0f);
++			RenderingEngine::get_raw_device()->rumbleGamepad(heavy, light, duration_ms);
++		}
++	}
++
+ 	// Play damage sound
+ 	client->getEventManager()->put(new SimpleTriggerEvent(MtEvent::PLAYER_DAMAGE));
+ }
+diff --git a/src/client/inputhandler.cpp b/src/client/inputhandler.cpp
+index 0f86e1e..f1a4285 100644
+--- a/src/client/inputhandler.cpp
++++ b/src/client/inputhandler.cpp
+@@ -3,11 +3,14 @@
+ // Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
+ // Copyright (C) 2017 nerzhul, Loic Blot <loic.blot@unix-experience.fr>
+ 
++#include <cmath>
++#include <algorithm>
+ #include "porting.h"
+ #include "settings.h"
+ #include "util/numeric.h"
+ #include "inputhandler.h"
+ #include "gui/mainmenumanager.h"
++#include "gui/gamepadnav.h"
+ #include "gui/touchcontrols.h"
+ #include "hud_element.h"
+ #include "log_internal.h"
+@@ -16,7 +19,14 @@
+ static const std::array input_settings = {
+ 	"keyboard_camera_speed",
+ 	"joystick_frustum_sensitivity",
+-	"repeat_joystick_button_time"
++	"repeat_joystick_button_time",
++	"joystick_inner_deadzone",
++	"joystick_outer_deadzone",
++	"gamepad_radial_deadzone",
++	"gamepad_response_curve",
++	"gamepad_trigger_threshold",
++	"gamepad_invert_look_y",
++	"gamepad_look_vertical_ratio"
+ };
+ 
+ InputHandler::InputHandler()
+@@ -113,12 +123,23 @@ void MyEventReceiver::reloadKeybindings()
+ 		KeyType::CAMERA_PITCH_UP,
+ 		KeyType::CAMERA_PITCH_DOWN
+ 	};
++	const float look_sensitivity = g_settings->getFloat("joystick_frustum_sensitivity", 0.001f, 720.0f);
++	const float vertical_ratio = g_settings->getFloat("gamepad_look_vertical_ratio", 0.1f, 4.0f);
+ 	for (const auto action: camera_rotation_actions) {
+ 		auto &keybinding = keybindings[action];
+ 		keybinding.scale.keyboard_mouse = g_settings->getFloat("keyboard_camera_speed", 0.001f, 720.0f);
+-		keybinding.scale.joystick = g_settings->getFloat("joystick_frustum_sensitivity", 0.001f, 720.0f);
++		const bool vertical = action == KeyType::CAMERA_PITCH_UP || action == KeyType::CAMERA_PITCH_DOWN;
++		keybinding.scale.joystick = look_sensitivity * (vertical ? vertical_ratio : 1.0f);
+ 	}
+ 
++	gamepad_cfg.inner_deadzone = g_settings->getFloat("joystick_inner_deadzone", 0.0f, 0.95f);
++	gamepad_cfg.outer_deadzone = g_settings->getFloat("joystick_outer_deadzone", 0.0f,
++			0.99f - gamepad_cfg.inner_deadzone);
++	gamepad_cfg.response_curve = g_settings->getFloat("gamepad_response_curve", 0.5f, 4.0f);
++	gamepad_cfg.trigger_threshold = g_settings->getFloat("gamepad_trigger_threshold", 0.0f, 0.95f);
++	gamepad_cfg.radial_deadzone = g_settings->getBool("gamepad_radial_deadzone");
++	gamepad_cfg.invert_look_y = g_settings->getBool("gamepad_invert_look_y");
++
+ }
+ 
+ bool MyEventReceiver::WasKeyDown(GameKeyType key)
+@@ -200,6 +221,76 @@ std::pair<float, bool> MyEventReceiver::checkKeyDown(GameKeyType action) const
+ 	return std::pair(value, setWasKeyDown);
+ }
+ 
++void MyEventReceiver::setGamepadAxisKeys(size_t axis, float value)
++{
++	SEvent::SGamepadAxisEvent key_event{};
++	key_event.Axis = static_cast<GamepadAxis>(axis);
++
++	key_event.Value = 1;
++	const KeyPress plus(key_event);
++	key_event.Value = -1;
++	const KeyPress minus(key_event);
++
++	// Always update both directions so the opposite one is released
++	setKeyDown(plus, std::max(value, 0.0f));
++	setKeyDown(minus, std::max(-value, 0.0f));
++}
++
++bool MyEventReceiver::handleGamepadAxis(const SEvent::SGamepadAxisEvent &event)
++{
++	const size_t axis = static_cast<size_t>(event.Axis);
++	if (axis >= gamepad_axes.size())
++		return false;
++
++	gamepad_axes[axis] = event.Value >= 0 ? event.Value / 32767.0f : event.Value / 32768.0f;
++
++	const auto &cfg = gamepad_cfg;
++	const float span = std::max(1.0f - cfg.outer_deadzone - cfg.inner_deadzone, 0.01f);
++
++	if (event.Axis == GamepadAxis::LEFT_TRIGGER || event.Axis == GamepadAxis::RIGHT_TRIGGER) {
++		// Triggers rest at 0 and only go in the positive direction
++		const float raw = std::max(gamepad_axes[axis], 0.0f);
++		const float value = rangelim((raw - cfg.trigger_threshold) /
++				std::max(1.0f - cfg.trigger_threshold, 0.01f), 0.0f, 1.0f);
++		setGamepadAxisKeys(axis, value);
++		return true;
++	}
++
++	// Sticks are processed as pairs: 0/1 = left stick, 2/3 = right stick
++	const size_t first = axis & ~static_cast<size_t>(1);
++	const float x = gamepad_axes[first];
++	const float y = gamepad_axes[first + 1];
++	float out_x, out_y;
++
++	if (cfg.radial_deadzone) {
++		// A circular dead zone keeps small diagonal movements precise,
++		// unlike one dead zone per axis.
++		const float mag = std::hypot(x, y);
++		if (mag <= cfg.inner_deadzone || mag <= 0.0f) {
++			out_x = out_y = 0.0f;
++		} else {
++			const float scaled = rangelim((mag - cfg.inner_deadzone) / span, 0.0f, 1.0f);
++			const float factor = std::pow(scaled, cfg.response_curve) / mag;
++			out_x = x * factor;
++			out_y = y * factor;
++		}
++	} else {
++		auto per_axis = [&](float v) {
++			const float scaled = rangelim((std::fabs(v) - cfg.inner_deadzone) / span, 0.0f, 1.0f);
++			return std::copysign(std::pow(scaled, cfg.response_curve), v);
++		};
++		out_x = per_axis(x);
++		out_y = per_axis(y);
++	}
++
++	if (first == 2 && cfg.invert_look_y)
++		out_y = -out_y;
++
++	setGamepadAxisKeys(first, out_x);
++	setGamepadAxisKeys(first + 1, out_y);
++	return true;
++}
++
+ bool MyEventReceiver::OnEvent(const SEvent &event)
+ {
+ 	if (event.EventType == EET_LOG_TEXT_EVENT) {
+@@ -260,6 +351,11 @@ bool MyEventReceiver::OnEvent(const SEvent &event)
+ 	else if (event.EventType == EET_TOUCH_INPUT_EVENT)
+ 		last_pointer_type = PointerType::Touch;
+ 
++	// Gamepads drive menus through a virtual cursor and focus navigation
++	if ((event.EventType == EET_GAMEPAD_BUTTON_EVENT || event.EventType == EET_GAMEPAD_AXIS_EVENT) &&
++			isMenuActive() && g_gamepad_nav.handleEvent(event))
++		return true;
++
+ 	bool ret = g_menumgr.runPreprocessEvent(event);
+ 	if (isMenuActive()) {
+ 		if (g_touchcontrols)
+@@ -282,6 +378,8 @@ bool MyEventReceiver::OnEvent(const SEvent &event)
+ 		KeyPress keyCode(static_cast<GameKeyType>(event.UserEvent.UserData1));
+ 		setKeyDown(keyCode, InputHandler::intToAnalog(event.UserEvent.UserData2));
+ 		return true;
++	} else if (event.EventType == EET_GAMEPAD_AXIS_EVENT && handleGamepadAxis(event.GamepadAxisEvent)) {
++		return true;
+ 	} else if (KeyPressEvent kpevent(event); kpevent) {
+ 		setKeyDown(kpevent.key, kpevent.analog_value);
+ 		if (auto opposite = kpevent.key.getOppositeAxisDirection(); opposite) {
+diff --git a/src/client/inputhandler.h b/src/client/inputhandler.h
+index 156e44e..ed962da 100644
+--- a/src/client/inputhandler.h
++++ b/src/client/inputhandler.h
+@@ -71,6 +71,7 @@ class MyEventReceiver : public IEventReceiver
+ 	void clearInput()
+ 	{
+ 		physicalKeyDown.clear();
++		gamepad_axes.fill(0);
+ 		axisValues.fill(0);
+ 		keyWasDown.reset();
+ 		keyWasPressed.reset();
+@@ -83,6 +84,7 @@ class MyEventReceiver : public IEventReceiver
+ 	void releaseAllKeys()
+ 	{
+ 		physicalKeyDown.clear();
++		gamepad_axes.fill(0);
+ 		for (size_t i = 0; i < KeyType::INTERNAL_ENUM_COUNT; i++)
+ 			keyWasReleased[i] = keyWasReleased[i] || axisValues[i] > 0;
+ 		axisValues.fill(0);
+@@ -108,6 +110,12 @@ class MyEventReceiver : public IEventReceiver
+ 	}
+ 
+ 	bool setKeyDown(KeyPress keyCode, float value);
++
++	// Gamepad axis processing (radial dead zone, response curve, trigger threshold).
++	// Returns true if the event was consumed.
++	bool handleGamepadAxis(const SEvent::SGamepadAxisEvent &event);
++	// Feeds a processed axis value (-1..1) to the plus/minus keys of that axis.
++	void setGamepadAxisKeys(size_t axis, float value);
+ 	void setKeyDown(GameKeyType action, std::pair<float, bool> new_state);
+ 	std::pair<float, bool> checkKeyDown(GameKeyType action) const;
+ 
+@@ -152,6 +160,19 @@ class MyEventReceiver : public IEventReceiver
+ 	// Repetition interval for joystick input
+ 	float repeat_joystick_button_time = 0.0f;
+ 
++	// Raw (unprocessed) gamepad axis values, -1..1
++	std::array<float, 6> gamepad_axes{};
++
++	// Cached gamepad settings (see reloadKeybindings)
++	struct {
++		float inner_deadzone = 0.25f;
++		float outer_deadzone = 0.0f;
++		float response_curve = 1.0f;
++		float trigger_threshold = 0.15f;
++		bool radial_deadzone = true;
++		bool invert_look_y = false;
++	} gamepad_cfg;
++
+ 	s32 mouse_wheel = 0;
+ 
+ 	// The current state of physical keys.
+diff --git a/src/client/renderingengine.cpp b/src/client/renderingengine.cpp
+index 186af74..03e82a4 100644
+--- a/src/client/renderingengine.cpp
++++ b/src/client/renderingengine.cpp
+@@ -14,6 +14,7 @@
+ #include "localplayer.h"
+ #include "gettext.h"
+ #include "client/hud.h"
++#include "gui/gamepadnav.h"
+ #include "client/texturesource.h"
+ #include "camera.h"
+ #include "minimap.h"
+@@ -407,6 +408,12 @@ std::vector<video::E_DRIVER_TYPE> RenderingEngine::getSupportedVideoDrivers()
+ 	return drivers;
+ }
+ 
++bool RenderingEngine::run()
++{
++	g_gamepad_nav.step();
++	return m_device->run();
++}
++
+ void RenderingEngine::initialize(Client *client, Hud *hud)
+ {
+ 	const std::string &draw_mode = g_settings->get("3d_mode");
+diff --git a/src/client/renderingengine.h b/src/client/renderingengine.h
+index cd3b920..965dbe2 100644
+--- a/src/client/renderingengine.h
++++ b/src/client/renderingengine.h
+@@ -134,10 +134,8 @@ class RenderingEngine
+ 	void initialize(Client *client, Hud *hud);
+ 	void finalize();
+ 
+-	bool run()
+-	{
+-		return m_device->run();
+-	}
++	// Also advances gamepad menu navigation (see gui/gamepadnav.h)
++	bool run();
+ 
+ 	// FIXME: this is still global when it shouldn't be
+ 	static ShadowRenderer *get_shadow_renderer()
+diff --git a/src/defaultsettings.cpp b/src/defaultsettings.cpp
+index d495bea..e958d76 100644
+--- a/src/defaultsettings.cpp
++++ b/src/defaultsettings.cpp
+@@ -144,8 +144,8 @@ void set_default_settings()
+ 	settings->setDefault("keymap_zoom", "SYSTEM_SCANCODE_29|GAMEPAD_BUTTON_11"); // KEY_KEY_Z|D-Pad Up
+ 	settings->setDefault("keymap_inventory", "SYSTEM_SCANCODE_12|GAMEPAD_BUTTON_3"); // KEY_KEY_I|Gamepad North
+ 	settings->setDefault("keymap_pause", "GAMEPAD_BUTTON_6"); // Gamepad Start
+-	settings->setDefault("keymap_aux1", "SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2"); // KEY_KEY_E|Gamepad West
+-	settings->setDefault("keymap_chat", "SYSTEM_SCANCODE_23"); // KEY_KEY_T
++	settings->setDefault("keymap_aux1", "SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2|GAMEPAD_BUTTON_7"); // KEY_KEY_E|Gamepad West|Left stick click
++	settings->setDefault("keymap_chat", "SYSTEM_SCANCODE_23|GAMEPAD_BUTTON_14"); // KEY_KEY_T|D-Pad Right
+ 	settings->setDefault("keymap_cmd", "SYSTEM_SCANCODE_56"); // /
+ 	settings->setDefault("keymap_cmd_local", "SYSTEM_SCANCODE_55"); // .
+ 	settings->setDefault("keymap_minimap", "SYSTEM_SCANCODE_25|GAMEPAD_BUTTON_4"); // KEY_KEY_V|Gamepad Back
+@@ -175,12 +175,12 @@ void set_default_settings()
+ #endif
+ 	settings->setDefault("keymap_toggle_debug", "SYSTEM_SCANCODE_62"); // KEY_F5
+ 	settings->setDefault("keymap_toggle_profiler", "SYSTEM_SCANCODE_63"); // KEY_F6
+-	settings->setDefault("keymap_camera_mode", "SYSTEM_SCANCODE_6"); // KEY_KEY_C
++	settings->setDefault("keymap_camera_mode", "SYSTEM_SCANCODE_6|GAMEPAD_BUTTON_8"); // KEY_KEY_C|Right stick click
+ 	settings->setDefault("keymap_camera_yaw_left", "GAMEPAD_AXIS_MINUS_2"); // Right Joystick
+ 	settings->setDefault("keymap_camera_yaw_right", "GAMEPAD_AXIS_PLUS_2"); // Right Joystick
+ 	settings->setDefault("keymap_camera_pitch_up", "GAMEPAD_AXIS_MINUS_3"); // Right Joystick
+ 	settings->setDefault("keymap_camera_pitch_down", "GAMEPAD_AXIS_PLUS_3"); // Right Joystick
+-	settings->setDefault("keymap_screenshot", "SYSTEM_SCANCODE_69|GAMEPAD_BUTTON_14"); // KEY_F12|D-Pad Right
++	settings->setDefault("keymap_screenshot", "SYSTEM_SCANCODE_69"); // KEY_F12
+ 	settings->setDefault("keymap_fullscreen", "SYSTEM_SCANCODE_68"); // KEY_F11
+ 	settings->setDefault("keymap_increase_viewing_range_min", "SYSTEM_SCANCODE_46"); // +
+ 	settings->setDefault("keymap_decrease_viewing_range_min", "SYSTEM_SCANCODE_45"); // -
+@@ -387,6 +387,17 @@ void set_default_settings()
+ 	settings->setDefault("joystick_frustum_sensitivity", "170");
+ 	settings->setDefault("joystick_inner_deadzone", "0.25");
+ 	settings->setDefault("joystick_outer_deadzone", "0");
++	settings->setDefault("gamepad_radial_deadzone", "true");
++	settings->setDefault("gamepad_response_curve", "1.5");
++	settings->setDefault("gamepad_trigger_threshold", "0.15");
++	settings->setDefault("gamepad_invert_look_y", "false");
++	settings->setDefault("gamepad_look_vertical_ratio", "1.0");
++	settings->setDefault("gamepad_rumble", "true");
++	settings->setDefault("gamepad_rumble_strength", "0.7");
++	settings->setDefault("gamepad_menu_navigation", "true");
++	settings->setDefault("gamepad_cursor_speed", "900");
++	settings->setDefault("gamepad_menu_repeat_delay", "0.35");
++	settings->setDefault("gamepad_menu_repeat_interval", "0.11");
+ 
+ 	// Main menu
+ 	settings->setDefault("serverlist_file", "favoriteservers.json");
+diff --git a/src/gui/CMakeLists.txt b/src/gui/CMakeLists.txt
+index 8b500ac..532a7db 100644
+--- a/src/gui/CMakeLists.txt
++++ b/src/gui/CMakeLists.txt
+@@ -14,6 +14,7 @@ set(gui_SRCS
+ 	${CMAKE_CURRENT_SOURCE_DIR}/guiEditBoxWithScrollbar.cpp
+ 	${CMAKE_CURRENT_SOURCE_DIR}/guiEngine.cpp
+ 	${CMAKE_CURRENT_SOURCE_DIR}/guiFormSpecMenu.cpp
++	${CMAKE_CURRENT_SOURCE_DIR}/gamepadnav.cpp
+ 	${CMAKE_CURRENT_SOURCE_DIR}/guiInventoryList.cpp
+ 	${CMAKE_CURRENT_SOURCE_DIR}/guiItemImage.cpp
+ 	${CMAKE_CURRENT_SOURCE_DIR}/guiOpenURL.cpp
+diff --git a/src/gui/gamepadnav.cpp b/src/gui/gamepadnav.cpp
+new file mode 100644
+index 0000000..70ed777
+--- /dev/null
++++ b/src/gui/gamepadnav.cpp
+@@ -0,0 +1,679 @@
++// Luanti
++// SPDX-License-Identifier: LGPL-2.1-or-later
++
++#include "gamepadnav.h"
++
++#include <cfloat>
++#include <cstdlib>
++#include <cmath>
++#include <algorithm>
++
++#include <ICursorControl.h>
++#include <IGUIElement.h>
++#include <IGUIEnvironment.h>
++#include <IGUIListBox.h>
++#include <IVideoDriver.h>
++#include <IrrlichtDevice.h>
++
++#include "client/keycode.h"
++#include "client/renderingengine.h"
++#include "guiButtonKey.h"
++#include "guiInventoryList.h"
++#include "guiTable.h"
++#include "mainmenumanager.h"
++#include "modalMenu.h"
++#include "porting.h"
++#include "settings.h"
++#include "util/numeric.h"
++
++GamepadMenuNavigator g_gamepad_nav;
++
++namespace
++{
++
++constexpr float STICK_NAV_ON = 0.6f;   // deflection needed to start navigating
++constexpr float STICK_NAV_OFF = 0.35f; // deflection below which navigation stops
++constexpr float CURSOR_STICK_DEADZONE = 0.18f;
++constexpr float CURSOR_STICK_CURVE = 2.0f; // fine control near the centre
++constexpr float SCROLL_NOTCHES_PER_SECOND = 12.0f;
++constexpr u64 DOUBLE_CLICK_MS = 400;
++constexpr s32 DOUBLE_CLICK_DISTANCE = 8;
++constexpr u64 CURSOR_TRUST_US = 300 * 1000;
++
++enum ButtonIndex { LEFT_BUTTON = 0, MIDDLE_BUTTON = 1, RIGHT_BUTTON = 2 };
++
++int buttonIndex(u32 sdl_button)
++{
++	switch (sdl_button) {
++	case SDL_BUTTON_LEFT:
++		return LEFT_BUTTON;
++	case SDL_BUTTON_MIDDLE:
++		return MIDDLE_BUTTON;
++	default:
++		return RIGHT_BUTTON;
++	}
++}
++
++// Circular dead zone with a response curve; keeps the direction of the input.
++v2f applyRadialDeadzone(v2f in, float inner, float curve)
++{
++	const float mag = in.getLength();
++	if (mag <= inner || mag <= 0.0f)
++		return v2f(0.0f, 0.0f);
++	const float scaled = std::min(1.0f, (mag - inner) / (1.0f - inner));
++	return in * (std::pow(scaled, curve) / mag);
++}
++
++s32 distanceToRange(s32 v, s32 lo, s32 hi)
++{
++	if (v < lo)
++		return lo - v;
++	if (v > hi)
++		return v - hi;
++	return 0;
++}
++
++} // namespace
++
++bool GamepadMenuNavigator::isEnabled()
++{
++	return g_settings->getBool("gamepad_menu_navigation");
++}
++
++bool GamepadMenuNavigator::isKeyCaptureActive()
++{
++	auto *device = RenderingEngine::get_raw_device();
++	if (!device)
++		return false;
++	auto *focus = device->getGUIEnvironment()->getFocus();
++	auto *key_button = dynamic_cast<GUIButtonKey *>(focus);
++	return key_button && key_button->isCapturing();
++}
++
++void GamepadMenuNavigator::reset()
++{
++	m_actions.clear();
++	std::fill(std::begin(m_axes), std::end(m_axes), 0.0f);
++	std::fill(std::begin(m_dpad), std::end(m_dpad), false);
++	std::fill(std::begin(m_mouse_held), std::end(m_mouse_held), false);
++	m_stick_active = false;
++	m_swallow_left_up = false;
++	m_nav_dir = v2s32(0, 0);
++	m_nav_timer = 0.0f;
++	m_nav_first = true;
++	m_scroll_accum = 0.0f;
++	m_cursor_valid = false;
++	m_dirty = false;
++}
++
++/*
++ * Event input
++ */
++
++bool GamepadMenuNavigator::handleEvent(const SEvent &event)
++{
++	if (!isEnabled() || !isMenuActive())
++		return false;
++
++	// While rebinding a key the button wants to see every gamepad input.
++	if (isKeyCaptureActive())
++		return false;
++
++	if (event.EventType == EET_GAMEPAD_BUTTON_EVENT) {
++		const auto &e = event.GamepadButtonEvent;
++		const bool down = e.PressedDown;
++
++		Action action;
++		switch (e.Button) {
++		case GamepadButton::SOUTH:
++			action.type = down ? Action::MOUSE_DOWN : Action::MOUSE_UP;
++			action.button = SDL_BUTTON_LEFT;
++			break;
++		case GamepadButton::WEST:
++			action.type = down ? Action::MOUSE_DOWN : Action::MOUSE_UP;
++			action.button = SDL_BUTTON_RIGHT;
++			break;
++		case GamepadButton::RIGHT_STICK:
++			action.type = down ? Action::MOUSE_DOWN : Action::MOUSE_UP;
++			action.button = SDL_BUTTON_MIDDLE;
++			break;
++		case GamepadButton::EAST:
++			m_dirty = true;
++			if (down) {
++				action.type = Action::KEY;
++				action.key = KEY_ESCAPE;
++				m_actions.push_back(action);
++			}
++			return true;
++		case GamepadButton::LEFT_SHOULDER:
++		case GamepadButton::RIGHT_SHOULDER:
++			m_dirty = true;
++			if (down) {
++				action.type = Action::TAB;
++				action.flag = e.Button == GamepadButton::LEFT_SHOULDER;
++				m_actions.push_back(action);
++			}
++			return true;
++		case GamepadButton::DPAD_UP:
++			m_dpad[0] = down;
++			m_dirty = true;
++			updateNavDirection();
++			return true;
++		case GamepadButton::DPAD_DOWN:
++			m_dpad[1] = down;
++			m_dirty = true;
++			updateNavDirection();
++			return true;
++		case GamepadButton::DPAD_LEFT:
++			m_dpad[2] = down;
++			m_dirty = true;
++			updateNavDirection();
++			return true;
++		case GamepadButton::DPAD_RIGHT:
++			m_dpad[3] = down;
++			m_dirty = true;
++			updateNavDirection();
++			return true;
++		default:
++			// Y, Start, Back, ... keep their normal meaning (e.g. closing the
++			// inventory or the pause menu).
++			return false;
++		}
++
++		m_dirty = true;
++		m_actions.push_back(action);
++		return true;
++	}
++
++	if (event.EventType == EET_GAMEPAD_AXIS_EVENT) {
++		const auto &e = event.GamepadAxisEvent;
++		const size_t axis = static_cast<size_t>(e.Axis);
++		if (axis >= 6)
++			return false;
++		m_axes[axis] = rangelim(e.Value / 32767.0f, -1.0f, 1.0f);
++		m_dirty = true;
++		if (axis < 2)
++			updateNavDirection();
++		return true;
++	}
++
++	return false;
++}
++
++v2s32 GamepadMenuNavigator::leftStickDirection()
++{
++	const float x = m_axes[0];
++	const float y = m_axes[1];
++	const float mag = std::hypot(x, y);
++
++	if (mag < (m_stick_active ? STICK_NAV_OFF : STICK_NAV_ON)) {
++		m_stick_active = false;
++		return v2s32(0, 0);
++	}
++	m_stick_active = true;
++
++	// Snap to the dominant axis so diagonals do not jump around.
++	if (std::fabs(x) > std::fabs(y))
++		return v2s32(x > 0 ? 1 : -1, 0);
++	return v2s32(0, y > 0 ? 1 : -1);
++}
++
++void GamepadMenuNavigator::updateNavDirection()
++{
++	v2s32 dir(m_dpad[3] - m_dpad[2], m_dpad[1] - m_dpad[0]);
++	if (dir.X != 0 && dir.Y != 0)
++		dir.Y = 0;
++	if (dir == v2s32(0, 0))
++		dir = leftStickDirection();
++	else
++		m_stick_active = false;
++
++	if (dir == m_nav_dir)
++		return;
++
++	m_nav_dir = dir;
++	m_nav_first = true;
++	if (dir != v2s32(0, 0)) {
++		Action action;
++		action.type = Action::NAVIGATE;
++		action.dir = dir;
++		m_actions.push_back(action);
++		// Wait a little before the movement starts repeating
++		m_nav_timer = g_settings->getFloat("gamepad_menu_repeat_delay", 0.05f, 2.0f);
++		m_nav_first = false;
++	}
++}
++
++/*
++ * Per frame work
++ */
++
++void GamepadMenuNavigator::step()
++{
++	const u64 now_us = porting::getTimeUs();
++	const float dt = m_last_step_us == 0 ? 0.0f :
++			std::min((now_us - m_last_step_us) / 1.0e6f, 0.1f);
++	m_last_step_us = now_us;
++
++	if (!isEnabled() || !isMenuActive()) {
++		if (m_dirty)
++			reset();
++		return;
++	}
++	if (isKeyCaptureActive())
++		return;
++
++	// Repeat navigation while a direction is held
++	if (m_nav_dir != v2s32(0, 0)) {
++		m_nav_timer -= dt;
++		if (m_nav_timer <= 0.0f) {
++			Action action;
++			action.type = Action::NAVIGATE;
++			action.dir = m_nav_dir;
++			m_actions.push_back(action);
++			m_nav_timer = g_settings->getFloat("gamepad_menu_repeat_interval", 0.02f, 1.0f);
++		}
++	}
++
++	while (!m_actions.empty()) {
++		const Action action = m_actions.front();
++		m_actions.pop_front();
++		runAction(action);
++		if (!isMenuActive()) {
++			// The action closed the last menu
++			reset();
++			return;
++		}
++	}
++
++	// Right stick: free cursor / scrolling
++	const v2f stick = applyRadialDeadzone(v2f(m_axes[2], m_axes[3]),
++			CURSOR_STICK_DEADZONE, CURSOR_STICK_CURVE);
++
++	if (m_axes[4] > 0.5f) {
++		// Left trigger held: scroll instead of moving the cursor
++		m_scroll_accum += -stick.Y * dt * SCROLL_NOTCHES_PER_SECOND;
++		while (m_scroll_accum >= 1.0f) {
++			postWheel(1.0f);
++			m_scroll_accum -= 1.0f;
++		}
++		while (m_scroll_accum <= -1.0f) {
++			postWheel(-1.0f);
++			m_scroll_accum += 1.0f;
++		}
++	} else {
++		m_scroll_accum = 0.0f;
++		if (stick.getLengthSQ() > 0.0f) {
++			auto *driver = RenderingEngine::get_video_driver();
++			const float scale = driver ? driver->getScreenSize().Height / 1080.0f : 1.0f;
++			const float speed = g_settings->getFloat("gamepad_cursor_speed", 50.0f, 10000.0f);
++			moveCursorBy(stick * (speed * scale * dt));
++		}
++	}
++}
++
++void GamepadMenuNavigator::runAction(const Action &action)
++{
++	switch (action.type) {
++	case Action::MOUSE_DOWN:
++		if (action.button == SDL_BUTTON_LEFT) {
++			// An opened dropdown list is operated with the keyboard path since
++			// its entries are not necessarily under the cursor.
++			auto *focus = RenderingEngine::get_raw_device()->getGUIEnvironment()->getFocus();
++			if (focus && focus->getType() == gui::EGUIET_LIST_BOX && focus->getParent() &&
++					focus->getParent()->getType() == gui::EGUIET_COMBO_BOX) {
++				postKeyPress(KEY_RETURN);
++				m_swallow_left_up = true;
++				return;
++			}
++		}
++		postMouseButton(action.button, true);
++		break;
++	case Action::MOUSE_UP:
++		if (action.button == SDL_BUTTON_LEFT && m_swallow_left_up) {
++			m_swallow_left_up = false;
++			return;
++		}
++		postMouseButton(action.button, false);
++		break;
++	case Action::KEY:
++		postKeyPress(action.key);
++		break;
++	case Action::TAB:
++		// GUIFormSpecMenu switches tabs on Ctrl+Tab / Ctrl+Shift+Tab
++		postKeyPress(KEY_TAB, action.flag, true);
++		break;
++	case Action::NAVIGATE:
++		navigate(action.dir);
++		break;
++	}
++}
++
++/*
++ * Spatial navigation
++ */
++
++bool GamepadMenuNavigator::sendArrowKeyToFocus(v2s32 dir)
++{
++	auto *device = RenderingEngine::get_raw_device();
++	auto *menu = g_menumgr.tryGetTopMenu();
++	auto *focus = device->getGUIEnvironment()->getFocus();
++	if (!focus || !menu || focus == menu)
++		return false;
++
++	const bool horizontal = dir.X != 0;
++	EKEY_CODE key;
++	if (dir.X < 0)
++		key = KEY_LEFT;
++	else if (dir.X > 0)
++		key = KEY_RIGHT;
++	else if (dir.Y < 0)
++		key = KEY_UP;
++	else
++		key = KEY_DOWN;
++
++	auto *list_box = dynamic_cast<gui::IGUIListBox *>(focus);
++	auto *table = dynamic_cast<GUITable *>(focus);
++	const bool list_like = list_box || table;
++	const bool edit = focus->getType() == gui::EGUIET_EDIT_BOX;
++	const bool scroll = focus->getType() == gui::EGUIET_SCROLL_BAR;
++
++	if (!list_like && !edit && !scroll)
++		return false;
++	// Lists only react to vertical arrows; sideways input moves the focus away.
++	if (list_like && horizontal)
++		return false;
++
++	auto selection = [&]() -> s32 {
++		if (list_box)
++			return list_box->getSelected();
++		if (table)
++			return table->getSelected();
++		return -2;
++	};
++
++	const s32 before = selection();
++	if (!postKeyPress(key))
++		return false;
++	// At the first/last row nothing changes: let the focus leave the list.
++	if (list_like && selection() == before)
++		return false;
++	return true;
++}
++
++void GamepadMenuNavigator::collectCandidates(gui::IGUIElement *root,
++		gui::IGUIElement *menu, std::vector<Candidate> &out) const
++{
++	for (gui::IGUIElement *child : root->getChildren()) {
++		if (!child->isVisible() || !child->isEnabled())
++			continue;
++
++		if (auto *inv_list = dynamic_cast<GUIInventoryList *>(child)) {
++			for (const auto &rect : inv_list->getSlotRects())
++				out.push_back({rect, nullptr});
++			continue;
++		}
++
++		const auto type = child->getType();
++		const bool container = type == gui::EGUIET_TAB_CONTROL || type == gui::EGUIET_TAB;
++		const bool selectable = !container && (child->isTabStop() ||
++				(type == gui::EGUIET_SCROLL_BAR && child->getParent() == menu));
++		if (selectable) {
++			const core::rect<s32> rect = child->getAbsoluteClippingRect();
++			if (rect.getArea() > 0)
++				out.push_back({rect, child});
++		}
++
++		collectCandidates(child, menu, out);
++	}
++}
++
++void GamepadMenuNavigator::focusCandidate(const Candidate &candidate)
++{
++	if (candidate.element)
++		RenderingEngine::get_raw_device()->getGUIEnvironment()->setFocus(candidate.element);
++
++	// Put the cursor on the target so hovering, tooltips and clicks all agree
++	// with the focus.
++	setCursorPos(candidate.area.getCenter());
++}
++
++void GamepadMenuNavigator::navigate(v2s32 dir)
++{
++	auto *menu = g_menumgr.tryGetTopMenu();
++	if (!menu)
++		return;
++
++	if (sendArrowKeyToFocus(dir))
++		return;
++
++	std::vector<Candidate> candidates;
++	collectCandidates(menu, menu, candidates);
++	if (candidates.empty())
++		return;
++
++	const v2s32 cur = getCursorPos();
++
++	const Candidate *best = nullptr;
++	float best_score = FLT_MAX;
++	bool inside_any = false;
++
++	for (const auto &c : candidates) {
++		if (c.area.isPointInside(cur)) {
++			// This is the widget we are on right now.
++			inside_any = true;
++			continue;
++		}
++		const v2s32 center = c.area.getCenter();
++		const v2s32 delta = center - cur;
++		const s32 along = delta.X * dir.X + delta.Y * dir.Y;
++		if (along <= 0)
++			continue;
++
++		const s32 perp_center = std::abs(dir.X != 0 ? delta.Y : delta.X);
++		const s32 perp_gap = dir.X != 0 ?
++				distanceToRange(cur.Y, c.area.UpperLeftCorner.Y, c.area.LowerRightCorner.Y) :
++				distanceToRange(cur.X, c.area.UpperLeftCorner.X, c.area.LowerRightCorner.X);
++
++		// Prefer widgets straight ahead over ones that are merely closer
++		const float score = along + 4.0f * perp_gap + 0.5f * perp_center;
++		if (score < best_score) {
++			best_score = score;
++			best = &c;
++		}
++	}
++
++	if (!best && !inside_any) {
++		// Nothing is selected yet: start with the closest widget in any direction.
++		for (const auto &c : candidates) {
++			const float dist = (c.area.getCenter() - cur).getLengthSQ();
++			if (dist < best_score) {
++				best_score = dist;
++				best = &c;
++			}
++		}
++	}
++
++	if (best)
++		focusCandidate(*best);
++}
++
++/*
++ * Posting events
++ */
++
++void GamepadMenuNavigator::postKey(EKEY_CODE key, bool pressed, bool shift, bool ctrl) const
++{
++	SEvent ev{};
++	ev.EventType = EET_KEY_INPUT_EVENT;
++	ev.KeyInput.Key = key;
++	ev.KeyInput.Char = 0;
++	ev.KeyInput.SystemKeyCode = key == KEY_ESCAPE ? EscapeKey.getScancode() : 0;
++	ev.KeyInput.PressedDown = pressed;
++	ev.KeyInput.Shift = shift;
++	ev.KeyInput.Control = ctrl;
++	RenderingEngine::get_raw_device()->postEventFromUser(ev);
++}
++
++bool GamepadMenuNavigator::postKeyPress(EKEY_CODE key, bool shift, bool ctrl) const
++{
++	SEvent ev{};
++	ev.EventType = EET_KEY_INPUT_EVENT;
++	ev.KeyInput.Key = key;
++	ev.KeyInput.Char = 0;
++	ev.KeyInput.SystemKeyCode = key == KEY_ESCAPE ? EscapeKey.getScancode() : 0;
++	ev.KeyInput.PressedDown = true;
++	ev.KeyInput.Shift = shift;
++	ev.KeyInput.Control = ctrl;
++	const bool handled = RenderingEngine::get_raw_device()->postEventFromUser(ev);
++
++	// The menu may have been closed by the key press
++	if (isMenuActive())
++		postKey(key, false, shift, ctrl);
++	return handled;
++}
++
++u32 GamepadMenuNavigator::heldButtonMask() const
++{
++	u32 mask = 0;
++	if (m_mouse_held[LEFT_BUTTON])
++		mask |= SDL_BUTTON_MASK(SDL_BUTTON_LEFT);
++	if (m_mouse_held[MIDDLE_BUTTON])
++		mask |= SDL_BUTTON_MASK(SDL_BUTTON_MIDDLE);
++	if (m_mouse_held[RIGHT_BUTTON])
++		mask |= SDL_BUTTON_MASK(SDL_BUTTON_RIGHT);
++	return mask;
++}
++
++void GamepadMenuNavigator::postMouseButton(u32 button, bool down)
++{
++	const v2s32 pos = getCursorPos();
++	m_mouse_held[buttonIndex(button)] = down;
++
++	SEvent ev{};
++	ev.EventType = EET_MOUSE_INPUT_EVENT;
++	ev.MouseInput.X = pos.X;
++	ev.MouseInput.Y = pos.Y;
++	ev.MouseInput.Button = button;
++	ev.MouseInput.ButtonStates = heldButtonMask();
++	ev.MouseInput.Shift = shiftHeld();
++	ev.MouseInput.Control = false;
++
++	switch (button) {
++	case SDL_BUTTON_LEFT:
++		ev.MouseInput.Event = down ? EMIE_LMOUSE_PRESSED_DOWN : EMIE_LMOUSE_LEFT_UP;
++		break;
++	case SDL_BUTTON_MIDDLE:
++		ev.MouseInput.Event = down ? EMIE_MMOUSE_PRESSED_DOWN : EMIE_MMOUSE_LEFT_UP;
++		break;
++	default:
++		ev.MouseInput.Event = down ? EMIE_RMOUSE_PRESSED_DOWN : EMIE_RMOUSE_LEFT_UP;
++		break;
++	}
++
++	auto *device = RenderingEngine::get_raw_device();
++	device->postEventFromUser(ev);
++
++	// The SDL backend produces double click events itself; do the same here.
++	if (down && button == SDL_BUTTON_LEFT && isMenuActive()) {
++		const u64 now = porting::getTimeMs();
++		const v2s32 moved = pos - m_last_left_click_pos;
++		if (m_last_left_click_ms != 0 && now - m_last_left_click_ms <= DOUBLE_CLICK_MS &&
++				std::abs(moved.X) <= DOUBLE_CLICK_DISTANCE &&
++				std::abs(moved.Y) <= DOUBLE_CLICK_DISTANCE) {
++			ev.MouseInput.Event = EMIE_LMOUSE_DOUBLE_CLICK;
++			device->postEventFromUser(ev);
++			m_last_left_click_ms = 0;
++		} else {
++			m_last_left_click_ms = now;
++			m_last_left_click_pos = pos;
++		}
++	}
++}
++
++void GamepadMenuNavigator::postMouseMove(v2s32 pos) const
++{
++	SEvent ev{};
++	ev.EventType = EET_MOUSE_INPUT_EVENT;
++	ev.MouseInput.Event = EMIE_MOUSE_MOVED;
++	ev.MouseInput.X = pos.X;
++	ev.MouseInput.Y = pos.Y;
++	ev.MouseInput.ButtonStates = heldButtonMask();
++	ev.MouseInput.Shift = shiftHeld();
++	RenderingEngine::get_raw_device()->postEventFromUser(ev);
++}
++
++void GamepadMenuNavigator::postWheel(float wheel) const
++{
++	const v2s32 pos = getCursorPos();
++
++	SEvent ev{};
++	ev.EventType = EET_MOUSE_INPUT_EVENT;
++	ev.MouseInput.Event = EMIE_MOUSE_WHEEL;
++	ev.MouseInput.Wheel = wheel;
++	ev.MouseInput.X = pos.X;
++	ev.MouseInput.Y = pos.Y;
++	ev.MouseInput.ButtonStates = heldButtonMask();
++	ev.MouseInput.Shift = shiftHeld();
++	RenderingEngine::get_raw_device()->postEventFromUser(ev);
++}
++
++/*
++ * Cursor handling
++ */
++
++v2f GamepadMenuNavigator::currentCursor() const
++{
++	// The OS reports the cursor position with a delay after we move it, so
++	// trust our own value for a short while after the last gamepad movement.
++	if (m_cursor_valid && porting::getTimeUs() - m_cursor_stamp_us < CURSOR_TRUST_US)
++		return m_cursor;
++
++	auto *cc = RenderingEngine::get_raw_device()->getCursorControl();
++	if (!cc)
++		return m_cursor;
++	const auto pos = cc->getPosition();
++	return v2f(pos.X, pos.Y);
++}
++
++v2s32 GamepadMenuNavigator::getCursorPos() const
++{
++	const v2f c = currentCursor();
++	return v2s32(std::lround(c.X), std::lround(c.Y));
++}
++
++void GamepadMenuNavigator::setCursorPos(v2s32 pos)
++{
++	m_cursor = v2f(pos.X, pos.Y);
++	m_cursor_valid = true;
++	m_cursor_stamp_us = porting::getTimeUs();
++
++	if (auto *cc = RenderingEngine::get_raw_device()->getCursorControl())
++		cc->setPosition(pos.X, pos.Y);
++	postMouseMove(pos);
++}
++
++void GamepadMenuNavigator::moveCursorBy(v2f delta)
++{
++	v2f target = currentCursor() + delta;
++
++	if (auto *driver = RenderingEngine::get_video_driver()) {
++		const auto size = driver->getScreenSize();
++		target.X = rangelim(target.X, 0.0f, (float)size.Width - 1.0f);
++		target.Y = rangelim(target.Y, 0.0f, (float)size.Height - 1.0f);
++	}
++
++	const v2s32 old_pos = getCursorPos();
++	const v2s32 new_pos(std::lround(target.X), std::lround(target.Y));
++
++	// Keep the sub-pixel remainder so slow movement still works
++	m_cursor = target;
++	m_cursor_valid = true;
++	m_cursor_stamp_us = porting::getTimeUs();
++
++	if (new_pos != old_pos) {
++		if (auto *cc = RenderingEngine::get_raw_device()->getCursorControl())
++			cc->setPosition(new_pos.X, new_pos.Y);
++		postMouseMove(new_pos);
++	}
++}
+diff --git a/src/gui/gamepadnav.h b/src/gui/gamepadnav.h
+new file mode 100644
+index 0000000..3504e33
+--- /dev/null
++++ b/src/gui/gamepadnav.h
+@@ -0,0 +1,126 @@
++// Luanti
++// SPDX-License-Identifier: LGPL-2.1-or-later
++
++#pragma once
++
++#include <deque>
++#include <vector>
++#include "irrlichttypes_bloated.h"
++#include "irr_v2d.h"
++#include "rect.h"
++#include "IEventReceiver.h"
++#include "Keycodes.h"
++
++namespace gui
++{
++class IGUIElement;
++}
++
++/**
++ * Lets a gamepad drive every menu and formspec (main menu, pause menu,
++ * inventory, mod formspecs, ...).
++ *
++ * Controls while a menu is open:
++ *  - D-Pad / left stick:  move focus to the nearest widget (or inventory slot)
++ *                         in that direction. Lists, dropdowns, text fields and
++ *                         scrollbars get the arrow keys first.
++ *  - A (south):           left click at the cursor (hold to keep pressed)
++ *  - X (west):            right click
++ *  - R3 (right stick):    middle click
++ *  - B (east):            back / close (Escape)
++ *  - LB / RB:             previous / next tab
++ *  - Right stick:         move the cursor freely
++ *  - LT + right stick:    scroll the element under the cursor
++ *  - RT (held):           Shift modifier for clicks (quick-move in inventories)
++ *  - Y / Start:           not consumed, so the existing keymap_inventory and
++ *                         keymap_pause bindings still close menus.
++ *
++ * Everything works by moving the real cursor and posting regular mouse/key
++ * events, so it behaves exactly like mouse and keyboard input.
++ */
++class GamepadMenuNavigator
++{
++public:
++	/// Returns true if the event was consumed.
++	/// Must only be called for gamepad events.
++	bool handleEvent(const SEvent &event);
++
++	/// Called once per frame (from RenderingEngine::run()).
++	void step();
++
++	/// Forget held buttons, queued actions and directions.
++	void reset();
++
++private:
++	struct Action {
++		enum Type {
++			MOUSE_DOWN,
++			MOUSE_UP,
++			KEY,
++			TAB,
++			NAVIGATE,
++		} type;
++		u32 button = 0;           // SDL_BUTTON_* for mouse actions
++		EKEY_CODE key = KEY_UNKNOWN;
++		bool flag = false;        // TAB: go backwards
++		v2s32 dir;                // NAVIGATE: direction
++	};
++
++	struct Candidate {
++		core::rect<s32> area;
++		gui::IGUIElement *element; // nullptr for e.g. inventory slots
++	};
++
++	static bool isEnabled();
++	static bool isKeyCaptureActive();
++
++	void updateNavDirection();
++	v2s32 leftStickDirection();
++
++	void runAction(const Action &action);
++	void navigate(v2s32 dir);
++	bool sendArrowKeyToFocus(v2s32 dir);
++	void collectCandidates(gui::IGUIElement *root, gui::IGUIElement *menu,
++			std::vector<Candidate> &out) const;
++	void focusCandidate(const Candidate &candidate);
++
++	void postKey(EKEY_CODE key, bool pressed, bool shift = false, bool ctrl = false) const;
++	bool postKeyPress(EKEY_CODE key, bool shift = false, bool ctrl = false) const;
++	void postMouseButton(u32 button, bool down);
++	void postMouseMove(v2s32 pos) const;
++	void postWheel(float wheel) const;
++
++	v2f currentCursor() const;
++	v2s32 getCursorPos() const;
++	void setCursorPos(v2s32 pos);
++	void moveCursorBy(v2f delta);
++
++	u32 heldButtonMask() const;
++	bool shiftHeld() const { return m_axes[5] > 0.5f; }
++
++	std::deque<Action> m_actions;
++
++	float m_axes[6] = {};
++	bool m_dpad[4] = {}; // up, down, left, right
++	bool m_stick_active = false;
++
++	v2s32 m_nav_dir;
++	float m_nav_timer = 0.0f;
++	bool m_nav_first = true;
++
++	bool m_mouse_held[3] = {}; // left, middle, right
++	bool m_swallow_left_up = false;
++
++	v2f m_cursor;
++	bool m_cursor_valid = false;
++	u64 m_cursor_stamp_us = 0;
++	float m_scroll_accum = 0.0f;
++
++	u64 m_last_step_us = 0;
++	u64 m_last_left_click_ms = 0;
++	v2s32 m_last_left_click_pos;
++
++	bool m_dirty = false; // whether there is any state worth resetting
++};
++
++extern GamepadMenuNavigator g_gamepad_nav;
+diff --git a/src/gui/guiButtonKey.h b/src/gui/guiButtonKey.h
+index 90e64ae..23bdbbd 100644
+--- a/src/gui/guiButtonKey.h
++++ b/src/gui/guiButtonKey.h
+@@ -41,6 +41,9 @@ class GUIButtonKey : public GUIButton
+ 	//! Called if an event happened
+ 	virtual bool OnEvent(const SEvent &event) override;
+ 
++	//! Whether this button is currently waiting for the user to press a key/button
++	bool isCapturing() const { return capturing; }
++
+ private:
+ 	void sendKey();
+ 
+diff --git a/src/gui/guiInventoryList.cpp b/src/gui/guiInventoryList.cpp
+index df77af0..e4df69f 100644
+--- a/src/gui/guiInventoryList.cpp
++++ b/src/gui/guiInventoryList.cpp
+@@ -310,3 +310,34 @@ s32 GUIInventoryList::getItemIndexAtPos(v2s32 p) const
+ 
+ 	return -1;
+ }
++
++std::vector<core::rect<s32>> GUIInventoryList::getSlotRects() const
++{
++	std::vector<core::rect<s32>> rects;
++
++	if (!IsVisible || AbsoluteClippingRect.getArea() <= 0)
++		return rects;
++
++	Inventory *inv = m_invmgr->getInventory(m_inventoryloc);
++	if (!inv)
++		return rects;
++	InventoryList *ilist = inv->getList(m_listname);
++	if (!ilist)
++		return rects;
++
++	const core::rect<s32> imgrect(0, 0, m_slot_size.X, m_slot_size.Y);
++	const v2s32 base_pos = AbsoluteRect.UpperLeftCorner;
++	const s32 count = m_geom.X * m_geom.Y;
++
++	for (s32 i = 0; i < count; i++) {
++		if (i + m_start_item_i >= (s32)ilist->getSize())
++			break;
++		v2s32 p0((i % m_geom.X) * m_slot_spacing.X,
++				(i / m_geom.X) * m_slot_spacing.Y);
++		core::rect<s32> rect = imgrect + base_pos + p0;
++		rect.clipAgainst(AbsoluteClippingRect);
++		if (rect.getArea() > 0)
++			rects.push_back(rect);
++	}
++	return rects;
++}
+diff --git a/src/gui/guiInventoryList.h b/src/gui/guiInventoryList.h
+index 50f684c..b192a8e 100644
+--- a/src/gui/guiInventoryList.h
++++ b/src/gui/guiInventoryList.h
+@@ -4,6 +4,8 @@
+ 
+ #pragma once
+ 
++#include <vector>
++
+ #include "inventorymanager.h"
+ #include <IGUIElement.h>
+ #include <IGUIEnvironment.h>
+@@ -111,6 +113,10 @@ class GUIInventoryList : public gui::IGUIElement
+ 	// returns -1 if no item is at pos p
+ 	s32 getItemIndexAtPos(v2s32 p) const;
+ 
++	// Absolute (screen space) rectangles of all slots that currently exist and are
++	// visible. Used for gamepad navigation.
++	std::vector<core::rect<s32>> getSlotRects() const;
++
+ private:
+ 	InventoryManager *m_invmgr;
+ 	const InventoryLocation m_inventoryloc;
+diff --git a/src/settings_translation_file.cpp b/src/settings_translation_file.cpp
+index e2e8dd7..ed58659 100644
+--- a/src/settings_translation_file.cpp
++++ b/src/settings_translation_file.cpp
+@@ -156,6 +156,27 @@ fake_function() {
+ 	gettext("Joystick outer dead zone");
+ 	gettext("Joystick frustum sensitivity");
+ 	gettext("The sensitivity of the joystick axes for moving the\nin-game view frustum around.");
++	gettext("Circular stick dead zone");
++	gettext("Apply the dead zone to the whole stick (circular) instead of to each axis\nseparately. This keeps small diagonal movements precise.");
++	gettext("Stick response curve");
++	gettext("Shapes how stick deflection translates to movement and camera speed.\n1 is linear. Higher values give finer control near the centre of the stick\nwhile still reaching full speed at full deflection.");
++	gettext("Trigger threshold");
++	gettext("How far a trigger has to be pulled before it counts as pressed.");
++	gettext("Invert vertical look");
++	gettext("Invert the vertical axis of the right stick when looking around.");
++	gettext("Vertical look speed ratio");
++	gettext("Vertical look speed relative to horizontal look speed.\nValues below 1 make looking up and down slower.");
++	gettext("Gamepad vibration");
++	gettext("Vibrate the gamepad, for example when taking damage.");
++	gettext("Gamepad vibration strength");
++	gettext("Gamepad menu navigation");
++	gettext("Allow menus and formspecs to be controlled with a gamepad.\nD-Pad / left stick moves the focus, A clicks, X right-clicks, B goes back,\nLB/RB switch tabs, the right stick moves a free cursor,\nLT + right stick scrolls and RT acts as the Shift key.");
++	gettext("Gamepad cursor speed");
++	gettext("Speed of the free cursor (right stick) in menus, in pixels per second\non a 1080p screen at full stick deflection.");
++	gettext("Gamepad menu repeat delay");
++	gettext("Time in seconds before menu navigation starts repeating\nwhile a direction is held.");
++	gettext("Gamepad menu repeat interval");
++	gettext("Time in seconds between repeated menu navigation steps\nwhile a direction is held.");
+ 	gettext("Graphics and Audio");
+ 	gettext("Graphics");
+ 	gettext("Screen");
