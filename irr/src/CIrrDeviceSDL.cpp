@@ -296,6 +296,39 @@ GamepadButtonLabel CIrrDeviceSDL::getGamepadButtonLabel(const GamepadButton butt
 	return GamepadButtonLabel::UNKNOWN;
 }
 
+bool CIrrDeviceSDL::hasGamepad() const
+{
+#if defined(_IRR_COMPILE_WITH_JOYSTICK_EVENTS_)
+	return !gamepads.empty();
+#else
+	return false;
+#endif
+}
+
+bool CIrrDeviceSDL::rumbleGamepad(u16 low_frequency, u16 high_frequency, u32 duration_ms)
+{
+#if defined(_IRR_COMPILE_WITH_JOYSTICK_EVENTS_)
+	// Prefer the gamepad that was used last, fall back to any connected one.
+	auto p = gamepads.find(recentGamepadID);
+	if (p == gamepads.end())
+		p = gamepads.begin();
+	if (p == gamepads.end())
+		return false;
+#ifdef _IRR_USE_SDL3_
+	return SDL_RumbleGamepad(p->second, low_frequency, high_frequency, duration_ms);
+#elif SDL_VERSION_ATLEAST(2, 0, 9)
+	return SDL_GameControllerRumble(p->second, low_frequency, high_frequency, duration_ms) == 0;
+#else
+	return false;
+#endif
+#else
+	(void)low_frequency;
+	(void)high_frequency;
+	(void)duration_ms;
+	return false;
+#endif
+}
+
 #if defined(_IRR_COMPILE_WITH_JOYSTICK_EVENTS_) && defined(_IRR_USE_SDL3_)
 SDL_Gamepad *CIrrDeviceSDL::getRecentGamepad() const
 {

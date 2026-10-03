@@ -369,4 +369,21 @@ public:
 		// Dummy implementation
 		return GamepadButtonLabel::UNKNOWN;
 	}
+
+	//! Whether at least one gamepad is currently connected.
+	virtual bool hasGamepad() const {
+		return false;
+	}
+
+	//! Make the most recently used gamepad rumble.
+	/** \param low_frequency Strength of the low frequency (heavy) motor, 0-65535.
+	\param high_frequency Strength of the high frequency (light) motor, 0-65535.
+	\param duration_ms How long the rumble lasts, in milliseconds.
+	\return True if a gamepad accepted the rumble request. */
+	virtual bool rumbleGamepad(u16 low_frequency, u16 high_frequency, u32 duration_ms) {
+		(void)low_frequency;
+		(void)high_frequency;
+		(void)duration_ms;
+		return false;
+	}
 };

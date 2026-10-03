@@ -14,6 +14,7 @@
 #include "localplayer.h"
 #include "gettext.h"
 #include "client/hud.h"
+#include "gui/gamepadnav.h"
 #include "client/texturesource.h"
 #include "camera.h"
 #include "minimap.h"
@@ -405,6 +406,12 @@ std::vector<video::E_DRIVER_TYPE> RenderingEngine::getSupportedVideoDrivers()
 	}
 
 	return drivers;
+}
+
+bool RenderingEngine::run()
+{
+	g_gamepad_nav.step();
+	return m_device->run();
 }
 
 void RenderingEngine::initialize(Client *client, Hud *hud)

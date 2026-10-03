@@ -144,8 +144,8 @@ void set_default_settings()
 	settings->setDefault("keymap_zoom", "SYSTEM_SCANCODE_29|GAMEPAD_BUTTON_11"); // KEY_KEY_Z|D-Pad Up
 	settings->setDefault("keymap_inventory", "SYSTEM_SCANCODE_12|GAMEPAD_BUTTON_3"); // KEY_KEY_I|Gamepad North
 	settings->setDefault("keymap_pause", "GAMEPAD_BUTTON_6"); // Gamepad Start
-	settings->setDefault("keymap_aux1", "SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2"); // KEY_KEY_E|Gamepad West
-	settings->setDefault("keymap_chat", "SYSTEM_SCANCODE_23"); // KEY_KEY_T
+	settings->setDefault("keymap_aux1", "SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2|GAMEPAD_BUTTON_7"); // KEY_KEY_E|Gamepad West|Left stick click
+	settings->setDefault("keymap_chat", "SYSTEM_SCANCODE_23|GAMEPAD_BUTTON_14"); // KEY_KEY_T|D-Pad Right
 	settings->setDefault("keymap_cmd", "SYSTEM_SCANCODE_56"); // /
 	settings->setDefault("keymap_cmd_local", "SYSTEM_SCANCODE_55"); // .
 	settings->setDefault("keymap_minimap", "SYSTEM_SCANCODE_25|GAMEPAD_BUTTON_4"); // KEY_KEY_V|Gamepad Back
@@ -175,12 +175,12 @@ void set_default_settings()
 #endif
 	settings->setDefault("keymap_toggle_debug", "SYSTEM_SCANCODE_62"); // KEY_F5
 	settings->setDefault("keymap_toggle_profiler", "SYSTEM_SCANCODE_63"); // KEY_F6
-	settings->setDefault("keymap_camera_mode", "SYSTEM_SCANCODE_6"); // KEY_KEY_C
+	settings->setDefault("keymap_camera_mode", "SYSTEM_SCANCODE_6|GAMEPAD_BUTTON_8"); // KEY_KEY_C|Right stick click
 	settings->setDefault("keymap_camera_yaw_left", "GAMEPAD_AXIS_MINUS_2"); // Right Joystick
 	settings->setDefault("keymap_camera_yaw_right", "GAMEPAD_AXIS_PLUS_2"); // Right Joystick
 	settings->setDefault("keymap_camera_pitch_up", "GAMEPAD_AXIS_MINUS_3"); // Right Joystick
 	settings->setDefault("keymap_camera_pitch_down", "GAMEPAD_AXIS_PLUS_3"); // Right Joystick
-	settings->setDefault("keymap_screenshot", "SYSTEM_SCANCODE_69|GAMEPAD_BUTTON_14"); // KEY_F12|D-Pad Right
+	settings->setDefault("keymap_screenshot", "SYSTEM_SCANCODE_69"); // KEY_F12
 	settings->setDefault("keymap_fullscreen", "SYSTEM_SCANCODE_68"); // KEY_F11
 	settings->setDefault("keymap_increase_viewing_range_min", "SYSTEM_SCANCODE_46"); // +
 	settings->setDefault("keymap_decrease_viewing_range_min", "SYSTEM_SCANCODE_45"); // -
@@ -387,6 +387,17 @@ void set_default_settings()
 	settings->setDefault("joystick_frustum_sensitivity", "170");
 	settings->setDefault("joystick_inner_deadzone", "0.25");
 	settings->setDefault("joystick_outer_deadzone", "0");
+	settings->setDefault("gamepad_radial_deadzone", "true");
+	settings->setDefault("gamepad_response_curve", "1.5");
+	settings->setDefault("gamepad_trigger_threshold", "0.15");
+	settings->setDefault("gamepad_invert_look_y", "false");
+	settings->setDefault("gamepad_look_vertical_ratio", "1.0");
+	settings->setDefault("gamepad_rumble", "true");
+	settings->setDefault("gamepad_rumble_strength", "0.7");
+	settings->setDefault("gamepad_menu_navigation", "true");
+	settings->setDefault("gamepad_cursor_speed", "900");
+	settings->setDefault("gamepad_menu_repeat_delay", "0.35");
+	settings->setDefault("gamepad_menu_repeat_interval", "0.11");
 
 	// Main menu
 	settings->setDefault("serverlist_file", "favoriteservers.json");

@@ -14,6 +14,7 @@ set(gui_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/guiEditBoxWithScrollbar.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/guiEngine.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/guiFormSpecMenu.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/gamepadnav.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/guiInventoryList.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/guiItemImage.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/guiOpenURL.cpp

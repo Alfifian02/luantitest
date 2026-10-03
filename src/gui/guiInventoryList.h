@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "inventorymanager.h"
 #include <IGUIElement.h>
 #include <IGUIEnvironment.h>
@@ -110,6 +112,10 @@ public:
 
 	// returns -1 if no item is at pos p
 	s32 getItemIndexAtPos(v2s32 p) const;
+
+	// Absolute (screen space) rectangles of all slots that currently exist and are
+	// visible. Used for gamepad navigation.
+	std::vector<core::rect<s32>> getSlotRects() const;
 
 private:
 	InventoryManager *m_invmgr;

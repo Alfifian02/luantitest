@@ -7,6 +7,7 @@ local path = core.get_builtin_path() .. "common" .. DIR_DELIM .. "settings" .. D
 
 local component_funcs =  dofile(path .. "components.lua")
 local shadows_component =  dofile(path .. "shadows_component.lua")
+local gamepad_layouts = dofile(path .. "gamepad_layouts.lua")
 
 local loaded = false
 local info_icon_path = core.formspec_escape(defaulttexturedir .. "settings_info.png")
@@ -88,6 +89,113 @@ local function load_settingtypes()
 end
 
 
+-- Page for rebinding gamepad buttons and sticks.
+-- It only shows and edits the gamepad part of each keybinding, so keyboard
+-- and mouse bindings are never lost by accident.
+local function add_gamepad_bindings_page()
+	local layout_names = function()
+		return {
+			default = fgettext("Default"),
+			-- TRANSLATORS: Gamepad layout: movement on the right stick, looking on the left stick
+			southpaw = fgettext("Southpaw"),
+			-- TRANSLATORS: Gamepad layout: jump on the left bumper
+			bumper_jumper = fgettext("Bumper jumper"),
+		}
+	end
+
+	local layout_component = {
+		id = "gamepad_layout",
+		query_text = fgettext_ne("Gamepad layout"),
+		context = "client",
+		get_formspec = function(self, avail_w)
+			local names = layout_names()
+			local current = gamepad_layouts.detect(core.full_settingtypes, core.settings)
+			local fs = {
+				("label[0,0.4;%s]"):format(fgettext("Layout: $1",
+					current and names[current] or fgettext("Custom"))),
+			}
+			local n = #gamepad_layouts.layouts
+			local gap = 0.2
+			local w = (avail_w - gap * (n - 1)) / n
+			for i, layout in ipairs(gamepad_layouts.layouts) do
+				fs[#fs + 1] = ("button[%f,0.8;%f,0.8;gamepad_layout_%s;%s]"):format(
+					(i - 1) * (w + gap), w, layout.id,
+					core.formspec_escape(names[layout.id] or layout.id))
+			end
+			return table.concat(fs), 1.6
+		end,
+		on_submit = function(self, fields)
+			for _, layout in ipairs(gamepad_layouts.layouts) do
+				if fields["gamepad_layout_" .. layout.id] then
+					gamepad_layouts.apply(layout.id, core.full_settingtypes, core.settings)
+					return true
+				end
+			end
+		end,
+	}
+
+	local common, other = {}, {}
+	for _, info in ipairs(core.full_settingtypes) do
+		if info.type == "key" and info.name:sub(1, #"keymap_") == "keymap_" then
+			local item = {
+				id = info.name .. "_gamepad",
+				query_text = fgettext_ne(info.readable_name or info.name),
+				context = info.context or "client",
+				requires = info.requires,
+				make = function()
+					return component_funcs.gamepad_key(info)
+				end,
+			}
+			-- Actions that have a gamepad binding by default come first
+			local has_default = false
+			for _, v in ipairs((info.default or ""):split("|")) do
+				if gamepad_layouts.is_gamepad_keycode(v) then
+					has_default = true
+				end
+			end
+			table.insert(has_default and common or other, item)
+		end
+	end
+
+	local content = {
+		{ heading = fgettext_ne("Layout") },
+		layout_component,
+		component_funcs.note(fgettext_ne(
+			"Choosing a layout only changes gamepad bindings, " ..
+			"keyboard and mouse bindings are kept."), nil, 2),
+		{ heading = fgettext_ne("Common actions") },
+	}
+	for _, item in ipairs(common) do
+		content[#content + 1] = item
+	end
+	if #other > 0 then
+		content[#content + 1] = { heading = fgettext_ne("Other actions") }
+		for _, item in ipairs(other) do
+			content[#content + 1] = item
+		end
+	end
+
+	local page = {
+		id = "controls_gamepad_bindings",
+		title = fgettext_ne("Gamepad Bindings"),
+		section = "Controls",
+		content = content,
+	}
+	assert(not page_by_id[page.id], "Page " .. page.id .. " already registered")
+
+	-- Show the page right before "Gamepads and Joysticks"
+	local pos = #all_pages + 1
+	for i, p in ipairs(all_pages) do
+		if p.id == "controls_gamepads_and_joysticks" then
+			pos = i
+			break
+		end
+	end
+	table.insert(all_pages, pos, page)
+	page_by_id[page.id] = page
+end
+
+
 local function load()
 	if loaded then
 		return
@@ -143,6 +251,8 @@ local function load()
 
 	-- insert after "touch_controls"
 	table.insert(page_by_id.controls_touchscreen.content, 2, touchscreen_layout)
+
+	add_gamepad_bindings_page()
 
 	extra_components["secure.trusted_mods"] = {
 		before = {
@@ -453,7 +563,7 @@ local function build_page_components(page)
 				name = setting.name
 				requires = setting.requires
 				context = setting.context
-			elseif item.get_formspec then
+			elseif item.get_formspec or item.make then
 				name = item.id
 				requires = item.requires
 				context = item.context
@@ -488,6 +598,10 @@ local function build_page_components(page)
 			local component_func = component_funcs[setting.type]
 			assert(component_func, "Unknown setting type: " .. setting.type)
 			retval[i] = component_func(setting)
+		elseif item.make then
+			-- Components with state that must be recreated whenever the page
+			-- is rebuilt
+			retval[i] = item.make()
 		elseif item.get_formspec then
 			retval[i] = item
 		elseif item.heading then

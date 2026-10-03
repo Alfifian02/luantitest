@@ -2226,6 +2226,22 @@ void Game::handleClientEvent_PlayerDamage(ClientEvent *event, CameraOrientation 
 			rangelim(damage_ratio * 5.0f, 1.0f, 4.0f);
 	}
 
+	// Vibrate the gamepad (if any). Stronger and longer for bigger hits.
+	if (g_settings->getBool("gamepad_rumble")) {
+		LocalPlayer *player = client->getEnv().getLocalPlayer();
+		const f32 hp_max = player && player->getCAO() ?
+				player->getCAO()->getProperties().hp_max : PLAYER_MAX_HP_DEFAULT;
+		const f32 ratio = rangelim(event->player_damage.amount / hp_max, 0.0f, 1.0f);
+		const f32 strength = rangelim(g_settings->getFloat("gamepad_rumble_strength"), 0.0f, 1.0f);
+		const f32 power = rangelim(0.35f + ratio * 1.5f, 0.0f, 1.0f) * strength;
+		if (power > 0.0f) {
+			const u16 heavy = static_cast<u16>(power * 65535.0f);
+			const u16 light = static_cast<u16>(power * 0.6f * 65535.0f);
+			const u32 duration_ms = 120 + static_cast<u32>(ratio * 380.0f);
+			RenderingEngine::get_raw_device()->rumbleGamepad(heavy, light, duration_ms);
+		}
+	}
+
 	// Play damage sound
 	client->getEventManager()->put(new SimpleTriggerEvent(MtEvent::PLAYER_DAMAGE));
 }

@@ -196,9 +196,9 @@ keymap_inventory (Open inventory) key SYSTEM_SCANCODE_12|GAMEPAD_BUTTON_3
 keymap_pause (Open pause menu) key GAMEPAD_BUTTON_6
 
 #    Key for moving fast in fast mode.
-keymap_aux1 (Aux1) key SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2
+keymap_aux1 (Aux1) key SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2|GAMEPAD_BUTTON_7
 
-keymap_chat (Open chat) key SYSTEM_SCANCODE_23
+keymap_chat (Open chat) key SYSTEM_SCANCODE_23|GAMEPAD_BUTTON_14
 
 #    Key for opening the chat window to type commands.
 keymap_cmd (Command) key SYSTEM_SCANCODE_56
@@ -232,7 +232,7 @@ keymap_cinematic (Toggle cinematic mode) key
 
 keymap_minimap (Toggle minimap) key SYSTEM_SCANCODE_25|GAMEPAD_BUTTON_4
 
-keymap_screenshot (Screenshot) key SYSTEM_SCANCODE_69|GAMEPAD_BUTTON_14
+keymap_screenshot (Screenshot) key SYSTEM_SCANCODE_69
 
 keymap_fullscreen (Toggle fullscreen) key SYSTEM_SCANCODE_68
 
@@ -261,7 +261,7 @@ keymap_toggle_profiler (Toggle profiler) key SYSTEM_SCANCODE_63
 #    Key for toggling the display of mapblock boundaries.
 keymap_toggle_block_bounds (Toggle block bounds) key
 
-keymap_camera_mode (Toggle camera mode) key SYSTEM_SCANCODE_6
+keymap_camera_mode (Toggle camera mode) key SYSTEM_SCANCODE_6|GAMEPAD_BUTTON_8
 
 keymap_increase_viewing_range_min (Increase view range) key SYSTEM_SCANCODE_46
 
@@ -441,6 +441,48 @@ joystick_outer_deadzone (Joystick outer dead zone) float 0 0 1
 #    The sensitivity of the joystick axes for moving the
 #    in-game view frustum around.
 joystick_frustum_sensitivity (Joystick frustum sensitivity) float 170.0 0.001
+
+#    Apply the dead zone to the whole stick (circular) instead of to each axis
+#    separately. This keeps small diagonal movements precise.
+gamepad_radial_deadzone (Circular stick dead zone) bool true
+
+#    Shapes how stick deflection translates to movement and camera speed.
+#    1 is linear. Higher values give finer control near the centre of the stick
+#    while still reaching full speed at full deflection.
+gamepad_response_curve (Stick response curve) float 1.5 0.5 4
+
+#    How far a trigger has to be pulled before it counts as pressed.
+gamepad_trigger_threshold (Trigger threshold) float 0.15 0 0.95
+
+#    Invert the vertical axis of the right stick when looking around.
+gamepad_invert_look_y (Invert vertical look) bool false
+
+#    Vertical look speed relative to horizontal look speed.
+#    Values below 1 make looking up and down slower.
+gamepad_look_vertical_ratio (Vertical look speed ratio) float 1.0 0.1 4
+
+#    Vibrate the gamepad, for example when taking damage.
+gamepad_rumble (Gamepad vibration) bool true
+
+gamepad_rumble_strength (Gamepad vibration strength) float 0.7 0 1
+
+#    Allow menus and formspecs to be controlled with a gamepad.
+#    D-Pad / left stick moves the focus, A clicks, X right-clicks, B goes back,
+#    LB/RB switch tabs, the right stick moves a free cursor,
+#    LT + right stick scrolls and RT acts as the Shift key.
+gamepad_menu_navigation (Gamepad menu navigation) bool true
+
+#    Speed of the free cursor (right stick) in menus, in pixels per second
+#    on a 1080p screen at full stick deflection.
+gamepad_cursor_speed (Gamepad cursor speed) float 900 50 10000
+
+#    Time in seconds before menu navigation starts repeating
+#    while a direction is held.
+gamepad_menu_repeat_delay (Gamepad menu repeat delay) float 0.35 0.05 2
+
+#    Time in seconds between repeated menu navigation steps
+#    while a direction is held.
+gamepad_menu_repeat_interval (Gamepad menu repeat interval) float 0.11 0.02 1
 
 [Graphics and Audio] [client]
 

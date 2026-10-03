@@ -281,6 +281,9 @@ public:
 
 	GamepadButtonLabel getGamepadButtonLabel(const GamepadButton button) const override;
 
+	bool hasGamepad() const override;
+	bool rumbleGamepad(u16 low_frequency, u16 high_frequency, u32 duration_ms) override;
+
 private:
 	// Check if a key is a known special character with no side effects on text boxes.
 	static bool keyIsKnownSpecial(EKEY_CODE irrlichtKey);

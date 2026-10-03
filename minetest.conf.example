@@ -136,12 +136,12 @@
 #    Key for moving fast in fast mode.
 #    See https://docs.luanti.org/for-players/controls/
 #    type: key
-# keymap_aux1 = SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2
+# keymap_aux1 = SYSTEM_SCANCODE_8|GAMEPAD_BUTTON_2|GAMEPAD_BUTTON_7
 
 #    Open chat
 #    See https://docs.luanti.org/for-players/controls/
 #    type: key
-# keymap_chat = SYSTEM_SCANCODE_23
+# keymap_chat = SYSTEM_SCANCODE_23|GAMEPAD_BUTTON_14
 
 #    Key for opening the chat window to type commands.
 #    See https://docs.luanti.org/for-players/controls/
@@ -221,7 +221,7 @@
 #    Screenshot
 #    See https://docs.luanti.org/for-players/controls/
 #    type: key
-# keymap_screenshot = SYSTEM_SCANCODE_69|GAMEPAD_BUTTON_14
+# keymap_screenshot = SYSTEM_SCANCODE_69
 
 #    Toggle fullscreen
 #    See https://docs.luanti.org/for-players/controls/
@@ -296,7 +296,7 @@
 #    Toggle camera mode
 #    See https://docs.luanti.org/for-players/controls/
 #    type: key
-# keymap_camera_mode = SYSTEM_SCANCODE_6
+# keymap_camera_mode = SYSTEM_SCANCODE_6|GAMEPAD_BUTTON_8
 
 #    Increase view range
 #    See https://docs.luanti.org/for-players/controls/
@@ -573,6 +573,60 @@
 #    in-game view frustum around.
 #    type: float min: 0.001
 # joystick_frustum_sensitivity = 170.0
+
+#    Apply the dead zone to the whole stick (circular) instead of to each axis
+#    separately. This keeps small diagonal movements precise.
+#    type: bool
+# gamepad_radial_deadzone = true
+
+#    Shapes how stick deflection translates to movement and camera speed.
+#    1 is linear. Higher values give finer control near the centre of the stick
+#    while still reaching full speed at full deflection.
+#    type: float min: 0.5 max: 4
+# gamepad_response_curve = 1.5
+
+#    How far a trigger has to be pulled before it counts as pressed.
+#    type: float min: 0 max: 0.95
+# gamepad_trigger_threshold = 0.15
+
+#    Invert the vertical axis of the right stick when looking around.
+#    type: bool
+# gamepad_invert_look_y = false
+
+#    Vertical look speed relative to horizontal look speed.
+#    Values below 1 make looking up and down slower.
+#    type: float min: 0.1 max: 4
+# gamepad_look_vertical_ratio = 1.0
+
+#    Vibrate the gamepad, for example when taking damage.
+#    type: bool
+# gamepad_rumble = true
+
+#    Gamepad vibration strength
+#    type: float min: 0 max: 1
+# gamepad_rumble_strength = 0.7
+
+#    Allow menus and formspecs to be controlled with a gamepad.
+#    D-Pad / left stick moves the focus, A clicks, X right-clicks, B goes back,
+#    LB/RB switch tabs, the right stick moves a free cursor,
+#    LT + right stick scrolls and RT acts as the Shift key.
+#    type: bool
+# gamepad_menu_navigation = true
+
+#    Speed of the free cursor (right stick) in menus, in pixels per second
+#    on a 1080p screen at full stick deflection.
+#    type: float min: 50 max: 10000
+# gamepad_cursor_speed = 900
+
+#    Time in seconds before menu navigation starts repeating
+#    while a direction is held.
+#    type: float min: 0.05 max: 2
+# gamepad_menu_repeat_delay = 0.35
+
+#    Time in seconds between repeated menu navigation steps
+#    while a direction is held.
+#    type: float min: 0.02 max: 1
+# gamepad_menu_repeat_interval = 0.11
 
 #
 # Graphics and Audio

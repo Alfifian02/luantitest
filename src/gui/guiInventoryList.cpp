@@ -310,3 +310,34 @@ s32 GUIInventoryList::getItemIndexAtPos(v2s32 p) const
 
 	return -1;
 }
+
+std::vector<core::rect<s32>> GUIInventoryList::getSlotRects() const
+{
+	std::vector<core::rect<s32>> rects;
+
+	if (!IsVisible || AbsoluteClippingRect.getArea() <= 0)
+		return rects;
+
+	Inventory *inv = m_invmgr->getInventory(m_inventoryloc);
+	if (!inv)
+		return rects;
+	InventoryList *ilist = inv->getList(m_listname);
+	if (!ilist)
+		return rects;
+
+	const core::rect<s32> imgrect(0, 0, m_slot_size.X, m_slot_size.Y);
+	const v2s32 base_pos = AbsoluteRect.UpperLeftCorner;
+	const s32 count = m_geom.X * m_geom.Y;
+
+	for (s32 i = 0; i < count; i++) {
+		if (i + m_start_item_i >= (s32)ilist->getSize())
+			break;
+		v2s32 p0((i % m_geom.X) * m_slot_spacing.X,
+				(i / m_geom.X) * m_slot_spacing.Y);
+		core::rect<s32> rect = imgrect + base_pos + p0;
+		rect.clipAgainst(AbsoluteClippingRect);
+		if (rect.getArea() > 0)
+			rects.push_back(rect);
+	}
+	return rects;
+}

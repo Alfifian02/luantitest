@@ -41,6 +41,9 @@ public:
 	//! Called if an event happened
 	virtual bool OnEvent(const SEvent &event) override;
 
+	//! Whether this button is currently waiting for the user to press a key/button
+	bool isCapturing() const { return capturing; }
+
 private:
 	void sendKey();
 

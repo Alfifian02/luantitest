@@ -71,6 +71,7 @@ public:
 	void clearInput()
 	{
 		physicalKeyDown.clear();
+		gamepad_axes.fill(0);
 		axisValues.fill(0);
 		keyWasDown.reset();
 		keyWasPressed.reset();
@@ -83,6 +84,7 @@ public:
 	void releaseAllKeys()
 	{
 		physicalKeyDown.clear();
+		gamepad_axes.fill(0);
 		for (size_t i = 0; i < KeyType::INTERNAL_ENUM_COUNT; i++)
 			keyWasReleased[i] = keyWasReleased[i] || axisValues[i] > 0;
 		axisValues.fill(0);
@@ -108,6 +110,12 @@ private:
 	}
 
 	bool setKeyDown(KeyPress keyCode, float value);
+
+	// Gamepad axis processing (radial dead zone, response curve, trigger threshold).
+	// Returns true if the event was consumed.
+	bool handleGamepadAxis(const SEvent::SGamepadAxisEvent &event);
+	// Feeds a processed axis value (-1..1) to the plus/minus keys of that axis.
+	void setGamepadAxisKeys(size_t axis, float value);
 	void setKeyDown(GameKeyType action, std::pair<float, bool> new_state);
 	std::pair<float, bool> checkKeyDown(GameKeyType action) const;
 
@@ -151,6 +159,19 @@ private:
 
 	// Repetition interval for joystick input
 	float repeat_joystick_button_time = 0.0f;
+
+	// Raw (unprocessed) gamepad axis values, -1..1
+	std::array<float, 6> gamepad_axes{};
+
+	// Cached gamepad settings (see reloadKeybindings)
+	struct {
+		float inner_deadzone = 0.25f;
+		float outer_deadzone = 0.0f;
+		float response_curve = 1.0f;
+		float trigger_threshold = 0.15f;
+		bool radial_deadzone = true;
+		bool invert_look_y = false;
+	} gamepad_cfg;
 
 	s32 mouse_wheel = 0;
 

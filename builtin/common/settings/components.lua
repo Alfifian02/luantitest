@@ -478,15 +478,39 @@ local function get_key_setting(name)
 	return core.settings:get(name):split("|")
 end
 
+local function is_gamepad_keycode(str)
+	return str:sub(1, #"GAMEPAD_") == "GAMEPAD_"
+end
+
+-- Splits the bindings of a key setting into gamepad ones and all others
+-- (keyboard, mouse, ...), keeping the order within each group.
+local function split_gamepad_bindings(value)
+	local pad, others = {}, {}
+	for _, v in ipairs(value) do
+		table.insert(is_gamepad_keycode(v) and pad or others, v)
+	end
+	return pad, others
+end
+
 -- Setting names where an empty field shall be shown to assign new keybindings.
 local key_add_empty = {}
 
-function make.key(setting)
+-- If `gamepad_only` is set, only the gamepad bindings of the setting are shown
+-- and edited; keyboard and mouse bindings are left untouched.
+local function make_key(setting, gamepad_only)
+	local function get_shown_bindings()
+		local value = get_key_setting(setting.name)
+		if not gamepad_only then
+			return value
+		end
+		return (split_gamepad_bindings(value))
+	end
+
 	local btn_bind = "bind_" .. setting.name
 	local btn_clear = "unbind_" .. setting.name
 	local btn_add = "add_" .. setting.name
 	local function add_conflict_warnings(fs, height)
-		local value = get_key_setting(setting.name)
+		local value = get_shown_bindings()
 		if value == "" then
 			return height
 		end
@@ -522,15 +546,19 @@ function make.key(setting)
 
 	return {
 		info_text = setting.comment,
-		setting = setting,
+		-- Without `setting` the generic "reset to default" button is not shown.
+		-- That button would also reset keyboard and mouse bindings, so on the
+		-- gamepad page resetting is done through the layout presets instead.
+		setting = (not gamepad_only) and setting or nil,
 		spacing = 0.1,
 
 		get_formspec = function(self, avail_w)
 			local value_string = core.settings:get(setting.name) or ""
 			local default_value = setting.default or ""
-			self.resettable = core.settings:has(setting.name) and (value_string ~= default_value)
+			self.resettable = not gamepad_only and
+				core.settings:has(setting.name) and (value_string ~= default_value)
 			local value_width = math.max(2.5, avail_w / 2)
-			local value = get_key_setting(setting.name)
+			local value = get_shown_bindings()
 			local fs = {
 				("label[0,0.4;%s]"):format(get_label(setting)),
 			}
@@ -578,20 +606,46 @@ function make.key(setting)
 				key_add_empty[setting.name] = true
 				return true
 			end
-			local value = get_key_setting(setting.name)
+			local value = get_shown_bindings()
+			local function save()
+				if gamepad_only then
+					-- keep keyboard/mouse bindings, replace the gamepad ones
+					local _, others = split_gamepad_bindings(get_key_setting(setting.name))
+					for _, v in ipairs(value) do
+						others[#others + 1] = v
+					end
+					value = others
+				end
+				core.settings:set(setting.name, table.concat(value, "|"))
+			end
 			for i = 1, #value + 1 do
 				if fields[("%s_%d"):format(btn_bind, i)] then
-					value[i] = fields[("%s_%d"):format(btn_bind, i)]
-					core.settings:set(setting.name, table.concat(value, "|"))
+					local new = fields[("%s_%d"):format(btn_bind, i)]
+					if gamepad_only and not is_gamepad_keycode(new) then
+						-- Only gamepad input can be bound on the gamepad page.
+						-- (Keyboard/mouse are handled on the other page.)
+						return true
+					end
+					value[i] = new
+					save()
 					return true
 				elseif fields[("%s_%d"):format(btn_clear, i)] then
 					table.remove(value, i)
-					core.settings:set(setting.name, table.concat(value, "|"))
+					save()
 					return true
 				end
 			end
 		end,
 	}
+end
+
+function make.key(setting)
+	return make_key(setting, false)
+end
+
+-- Like make.key, but limited to the gamepad bindings of a setting
+function make.gamepad_key(setting)
+	return make_key(setting, true)
 end
 
 if INIT == "pause_menu" then

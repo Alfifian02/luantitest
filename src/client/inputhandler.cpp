@@ -3,11 +3,14 @@
 // Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 // Copyright (C) 2017 nerzhul, Loic Blot <loic.blot@unix-experience.fr>
 
+#include <cmath>
+#include <algorithm>
 #include "porting.h"
 #include "settings.h"
 #include "util/numeric.h"
 #include "inputhandler.h"
 #include "gui/mainmenumanager.h"
+#include "gui/gamepadnav.h"
 #include "gui/touchcontrols.h"
 #include "hud_element.h"
 #include "log_internal.h"
@@ -16,7 +19,14 @@
 static const std::array input_settings = {
 	"keyboard_camera_speed",
 	"joystick_frustum_sensitivity",
-	"repeat_joystick_button_time"
+	"repeat_joystick_button_time",
+	"joystick_inner_deadzone",
+	"joystick_outer_deadzone",
+	"gamepad_radial_deadzone",
+	"gamepad_response_curve",
+	"gamepad_trigger_threshold",
+	"gamepad_invert_look_y",
+	"gamepad_look_vertical_ratio"
 };
 
 InputHandler::InputHandler()
@@ -113,11 +123,22 @@ void MyEventReceiver::reloadKeybindings()
 		KeyType::CAMERA_PITCH_UP,
 		KeyType::CAMERA_PITCH_DOWN
 	};
+	const float look_sensitivity = g_settings->getFloat("joystick_frustum_sensitivity", 0.001f, 720.0f);
+	const float vertical_ratio = g_settings->getFloat("gamepad_look_vertical_ratio", 0.1f, 4.0f);
 	for (const auto action: camera_rotation_actions) {
 		auto &keybinding = keybindings[action];
 		keybinding.scale.keyboard_mouse = g_settings->getFloat("keyboard_camera_speed", 0.001f, 720.0f);
-		keybinding.scale.joystick = g_settings->getFloat("joystick_frustum_sensitivity", 0.001f, 720.0f);
+		const bool vertical = action == KeyType::CAMERA_PITCH_UP || action == KeyType::CAMERA_PITCH_DOWN;
+		keybinding.scale.joystick = look_sensitivity * (vertical ? vertical_ratio : 1.0f);
 	}
+
+	gamepad_cfg.inner_deadzone = g_settings->getFloat("joystick_inner_deadzone", 0.0f, 0.95f);
+	gamepad_cfg.outer_deadzone = g_settings->getFloat("joystick_outer_deadzone", 0.0f,
+			0.99f - gamepad_cfg.inner_deadzone);
+	gamepad_cfg.response_curve = g_settings->getFloat("gamepad_response_curve", 0.5f, 4.0f);
+	gamepad_cfg.trigger_threshold = g_settings->getFloat("gamepad_trigger_threshold", 0.0f, 0.95f);
+	gamepad_cfg.radial_deadzone = g_settings->getBool("gamepad_radial_deadzone");
+	gamepad_cfg.invert_look_y = g_settings->getBool("gamepad_invert_look_y");
 
 }
 
@@ -200,6 +221,76 @@ std::pair<float, bool> MyEventReceiver::checkKeyDown(GameKeyType action) const
 	return std::pair(value, setWasKeyDown);
 }
 
+void MyEventReceiver::setGamepadAxisKeys(size_t axis, float value)
+{
+	SEvent::SGamepadAxisEvent key_event{};
+	key_event.Axis = static_cast<GamepadAxis>(axis);
+
+	key_event.Value = 1;
+	const KeyPress plus(key_event);
+	key_event.Value = -1;
+	const KeyPress minus(key_event);
+
+	// Always update both directions so the opposite one is released
+	setKeyDown(plus, std::max(value, 0.0f));
+	setKeyDown(minus, std::max(-value, 0.0f));
+}
+
+bool MyEventReceiver::handleGamepadAxis(const SEvent::SGamepadAxisEvent &event)
+{
+	const size_t axis = static_cast<size_t>(event.Axis);
+	if (axis >= gamepad_axes.size())
+		return false;
+
+	gamepad_axes[axis] = event.Value >= 0 ? event.Value / 32767.0f : event.Value / 32768.0f;
+
+	const auto &cfg = gamepad_cfg;
+	const float span = std::max(1.0f - cfg.outer_deadzone - cfg.inner_deadzone, 0.01f);
+
+	if (event.Axis == GamepadAxis::LEFT_TRIGGER || event.Axis == GamepadAxis::RIGHT_TRIGGER) {
+		// Triggers rest at 0 and only go in the positive direction
+		const float raw = std::max(gamepad_axes[axis], 0.0f);
+		const float value = rangelim((raw - cfg.trigger_threshold) /
+				std::max(1.0f - cfg.trigger_threshold, 0.01f), 0.0f, 1.0f);
+		setGamepadAxisKeys(axis, value);
+		return true;
+	}
+
+	// Sticks are processed as pairs: 0/1 = left stick, 2/3 = right stick
+	const size_t first = axis & ~static_cast<size_t>(1);
+	const float x = gamepad_axes[first];
+	const float y = gamepad_axes[first + 1];
+	float out_x, out_y;
+
+	if (cfg.radial_deadzone) {
+		// A circular dead zone keeps small diagonal movements precise,
+		// unlike one dead zone per axis.
+		const float mag = std::hypot(x, y);
+		if (mag <= cfg.inner_deadzone || mag <= 0.0f) {
+			out_x = out_y = 0.0f;
+		} else {
+			const float scaled = rangelim((mag - cfg.inner_deadzone) / span, 0.0f, 1.0f);
+			const float factor = std::pow(scaled, cfg.response_curve) / mag;
+			out_x = x * factor;
+			out_y = y * factor;
+		}
+	} else {
+		auto per_axis = [&](float v) {
+			const float scaled = rangelim((std::fabs(v) - cfg.inner_deadzone) / span, 0.0f, 1.0f);
+			return std::copysign(std::pow(scaled, cfg.response_curve), v);
+		};
+		out_x = per_axis(x);
+		out_y = per_axis(y);
+	}
+
+	if (first == 2 && cfg.invert_look_y)
+		out_y = -out_y;
+
+	setGamepadAxisKeys(first, out_x);
+	setGamepadAxisKeys(first + 1, out_y);
+	return true;
+}
+
 bool MyEventReceiver::OnEvent(const SEvent &event)
 {
 	if (event.EventType == EET_LOG_TEXT_EVENT) {
@@ -260,6 +351,11 @@ bool MyEventReceiver::OnEvent(const SEvent &event)
 	else if (event.EventType == EET_TOUCH_INPUT_EVENT)
 		last_pointer_type = PointerType::Touch;
 
+	// Gamepads drive menus through a virtual cursor and focus navigation
+	if ((event.EventType == EET_GAMEPAD_BUTTON_EVENT || event.EventType == EET_GAMEPAD_AXIS_EVENT) &&
+			isMenuActive() && g_gamepad_nav.handleEvent(event))
+		return true;
+
 	bool ret = g_menumgr.runPreprocessEvent(event);
 	if (isMenuActive()) {
 		if (g_touchcontrols)
@@ -281,6 +377,8 @@ bool MyEventReceiver::OnEvent(const SEvent &event)
 	} else if (event.EventType == EET_USER_EVENT && event.UserEvent.type == EUET_GAME_KEY) {
 		KeyPress keyCode(static_cast<GameKeyType>(event.UserEvent.UserData1));
 		setKeyDown(keyCode, InputHandler::intToAnalog(event.UserEvent.UserData2));
+		return true;
+	} else if (event.EventType == EET_GAMEPAD_AXIS_EVENT && handleGamepadAxis(event.GamepadAxisEvent)) {
 		return true;
 	} else if (KeyPressEvent kpevent(event); kpevent) {
 		setKeyDown(kpevent.key, kpevent.analog_value);
